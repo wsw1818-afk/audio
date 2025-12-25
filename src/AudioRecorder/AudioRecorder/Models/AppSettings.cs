@@ -14,6 +14,7 @@ public class AppSettings
     public bool RecordMicrophone { get; set; } = true;
     public bool RecordSystem { get; set; } = true;
     public int MaxRecentFiles { get; set; } = 20;
+    public RecordingFormat RecordingFormat { get; set; } = RecordingFormat.WAV;
 
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

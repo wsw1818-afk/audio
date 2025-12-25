@@ -66,6 +66,7 @@ public class RecordingEngine : IDisposable
     public RecordingState State { get; private set; } = RecordingState.Stopped;
     public TimeSpan ElapsedTime => _stopwatch.Elapsed;
     public string CurrentFilePath => _currentFilePath;
+    public RecordingFormat TargetFormat { get; private set; } = RecordingFormat.WAV;
     public LevelMeter MicLevelMeter => _micLevelMeter;
     public LevelMeter SystemLevelMeter => _systemLevelMeter;
     public SyncManager SyncManager => _syncManager;
@@ -92,7 +93,10 @@ public class RecordingEngine : IDisposable
             throw new InvalidOperationException("이미 녹음 중입니다.");
 
         _options = options;
-        _currentFilePath = options.GetFullPath();
+        TargetFormat = options.Format;
+
+        // 항상 WAV로 먼저 녹음 (FLAC/MP3는 녹음 후 변환)
+        _currentFilePath = Path.Combine(options.OutputDirectory, $"Recording_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
         // 출력 디렉토리 확인
         var dir = Path.GetDirectoryName(_currentFilePath);

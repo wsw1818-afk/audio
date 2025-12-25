@@ -4,45 +4,82 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="clr-namespace:AudioRecorder.ViewModels"
+        xmlns:conv="clr-namespace:AudioRecorder.Converters"
         mc:Ignorable="d"
         Title="AudioRecorder Pro"
-        Height="850" Width="550"
-        MinHeight="750" MinWidth="450"
+        Height="600" Width="900"
+        MinHeight="500" MinWidth="750"
         WindowStartupLocation="CenterScreen"
-        Background="#1E1E1E">
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
 
     <Window.DataContext>
         <vm:MainViewModel />
     </Window.DataContext>
 
     <Window.Resources>
-        <!-- 색상 정의 -->
+        <!-- 색상 정의 - 모던 다크 테마 -->
+        <Color x:Key="AccentColor">#FFB347</Color>
+        <Color x:Key="AccentDarkColor">#E09422</Color>
+        <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}"/>
+        <SolidColorBrush x:Key="AccentDarkBrush" Color="{StaticResource AccentDarkColor}"/>
         <SolidColorBrush x:Key="PrimaryColor" Color="#4CAF50"/>
         <SolidColorBrush x:Key="SecondaryColor" Color="#2196F3"/>
-        <SolidColorBrush x:Key="DangerColor" Color="#F44336"/>
-        <SolidColorBrush x:Key="WarningColor" Color="#FF9800"/>
-        <SolidColorBrush x:Key="BackgroundColor" Color="#1E1E1E"/>
-        <SolidColorBrush x:Key="CardColor" Color="#2D2D2D"/>
+        <SolidColorBrush x:Key="DangerColor" Color="#FF5252"/>
+        <SolidColorBrush x:Key="WarningColor" Color="#FFB347"/>
+        <SolidColorBrush x:Key="BackgroundColor" Color="#0D1117"/>
+        <SolidColorBrush x:Key="CardColor" Color="#161B22"/>
+        <SolidColorBrush x:Key="SurfaceColor" Color="#21262D"/>
         <SolidColorBrush x:Key="TextColor" Color="#FFFFFF"/>
-        <SolidColorBrush x:Key="SubTextColor" Color="#AAAAAA"/>
+        <SolidColorBrush x:Key="SubTextColor" Color="#8B949E"/>
+        <SolidColorBrush x:Key="BorderColor" Color="#30363D"/>
 
-        <!-- 버튼 스타일 -->
-        <Style x:Key="RecordButtonStyle" TargetType="Button">
-            <Setter Property="Width" Value="70"/>
-            <Setter Property="Height" Value="70"/>
-            <Setter Property="Margin" Value="10"/>
-            <Setter Property="FontSize" Value="24"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="Background" Value="{StaticResource CardColor}"/>
+        <!-- 사이드바 버튼 스타일 -->
+        <Style x:Key="SidebarButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="40"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Margin" Value="0,5"/>
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="Foreground" Value="{StaticResource SubTextColor}"/>
+            <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border Background="{TemplateBinding Background}"
-                                CornerRadius="35"
-                                BorderThickness="2"
-                                BorderBrush="{TemplateBinding BorderBrush}">
+                                CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+                    <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 컨트롤 버튼 스타일 -->
+        <Style x:Key="ControlButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="50"/>
+            <Setter Property="Height" Value="50"/>
+            <Setter Property="Margin" Value="8,0"/>
+            <Setter Property="FontSize" Value="20"/>
+            <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="25">
                             <ContentPresenter HorizontalAlignment="Center"
                                               VerticalAlignment="Center"/>
                         </Border>
@@ -54,407 +91,573 @@
                     <Setter Property="Opacity" Value="0.8"/>
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Opacity" Value="0.4"/>
+                    <Setter Property="Opacity" Value="0.3"/>
                 </Trigger>
             </Style.Triggers>
         </Style>
 
-        <!-- 카드 스타일 -->
-        <Style x:Key="CardStyle" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource CardColor}"/>
-            <Setter Property="CornerRadius" Value="10"/>
-            <Setter Property="Padding" Value="15"/>
-            <Setter Property="Margin" Value="5"/>
-        </Style>
-
-        <!-- 체크박스 스타일 -->
-        <Style TargetType="CheckBox">
+        <!-- 파일 아이템 버튼 스타일 -->
+        <Style x:Key="FileItemButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Margin" Value="2,0"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
-            <Setter Property="Margin" Value="0,5"/>
+            <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Opacity" Value="0.8"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
-        <!-- 콤보박스 스타일 -->
-        <Style TargetType="ComboBox">
-            <Setter Property="Margin" Value="0,5"/>
-            <Setter Property="Padding" Value="8,5"/>
+        <!-- 윈도우 컨트롤 버튼 -->
+        <Style x:Key="WindowButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="32"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Foreground" Value="{StaticResource SubTextColor}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+                    <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
-        <!-- 슬라이더 스타일 -->
-        <Style TargetType="Slider">
-            <Setter Property="Margin" Value="0,5"/>
+        <!-- 모던 슬라이더 스타일 -->
+        <Style x:Key="ModernSliderStyle" TargetType="Slider">
+            <Setter Property="Height" Value="6"/>
+            <Setter Property="Background" Value="#333"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid>
+                            <Border Background="#333" CornerRadius="3" Height="6"/>
+                            <Border Background="{StaticResource AccentBrush}"
+                                    CornerRadius="3" Height="6"
+                                    HorizontalAlignment="Left"
+                                    Width="{TemplateBinding Value}"/>
+                            <Track x:Name="PART_Track">
+                                <Track.Thumb>
+                                    <Thumb Width="14" Height="14">
+                                        <Thumb.Template>
+                                            <ControlTemplate>
+                                                <Ellipse Fill="{StaticResource AccentBrush}"
+                                                         Width="14" Height="14"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
     </Window.Resources>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <!-- 타이틀 -->
-        <TextBlock Grid.Row="0"
-                   Text="🎙️ AudioRecorder Pro"
-                   FontSize="24"
-                   FontWeight="Bold"
-                   Foreground="{StaticResource TextColor}"
-                   HorizontalAlignment="Center"
-                   Margin="0,20,0,10"/>
-
-        <!-- 타이머 표시 -->
-        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Margin="20,5">
-            <StackPanel HorizontalAlignment="Center">
-                <TextBlock Text="{Binding ElapsedTime}"
-                           FontSize="48"
-                           FontWeight="Bold"
-                           FontFamily="Consolas"
-                           Foreground="{StaticResource TextColor}"
-                           HorizontalAlignment="Center"/>
-                <TextBlock Text="{Binding StatusText}"
-                           FontSize="14"
-                           Foreground="{StaticResource SubTextColor}"
-                           HorizontalAlignment="Center"
-                           Margin="0,5,0,0"/>
-            </StackPanel>
-        </Border>
-
-        <!-- 레벨 미터 -->
-        <Grid Grid.Row="2" Margin="20,5">
+    <!-- 메인 컨테이너 -->
+    <Border Background="{StaticResource BackgroundColor}"
+            CornerRadius="12"
+            BorderBrush="{StaticResource BorderColor}"
+            BorderThickness="1">
+        <Grid>
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="60"/>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="280"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 마이크 레벨 -->
-            <Border Grid.Column="0" Style="{StaticResource CardStyle}">
-                <StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                        <TextBlock Text="🎤 마이크" FontSize="14" Foreground="{StaticResource TextColor}"/>
-                        <TextBlock Text="{Binding MicLevelDb}" FontSize="12"
-                                   Foreground="{StaticResource SubTextColor}" Margin="10,0,0,0"/>
-                    </StackPanel>
-
-                    <!-- 레벨 바 -->
-                    <Border Background="#333" CornerRadius="3" Height="20" x:Name="MicLevelContainer">
-                        <Border Background="{StaticResource PrimaryColor}"
-                                CornerRadius="3"
-                                HorizontalAlignment="Left"
-                                Width="{Binding MicLevel, Converter={StaticResource LevelToWidthConverter}}"/>
-                    </Border>
-
-                    <!-- 볼륨 조절 -->
-                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                        <TextBlock Text="볼륨:" Foreground="{StaticResource SubTextColor}"
-                                   VerticalAlignment="Center" Width="40"/>
-                        <Slider Value="{Binding MicVolume}"
-                                Minimum="0" Maximum="1" Width="100"
-                                VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding MicVolume, StringFormat={}{0:P0}}"
-                                   Foreground="{StaticResource SubTextColor}"
-                                   VerticalAlignment="Center" Width="40" Margin="5,0,0,0"/>
-                    </StackPanel>
-
-                    <!-- 포함 체크 -->
-                    <CheckBox Content="녹음 포함" IsChecked="{Binding RecordMicrophone}" Margin="0,5,0,0"/>
-                </StackPanel>
-            </Border>
-
-            <!-- 시스템 오디오 레벨 -->
-            <Border Grid.Column="1" Style="{StaticResource CardStyle}">
-                <StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                        <TextBlock Text="🔊 시스템" FontSize="14" Foreground="{StaticResource TextColor}"/>
-                        <TextBlock Text="{Binding SystemLevelDb}" FontSize="12"
-                                   Foreground="{StaticResource SubTextColor}" Margin="10,0,0,0"/>
-                    </StackPanel>
-
-                    <!-- 레벨 바 -->
-                    <Border Background="#333" CornerRadius="3" Height="20">
-                        <Border Background="{StaticResource SecondaryColor}"
-                                CornerRadius="3"
-                                HorizontalAlignment="Left"
-                                Width="{Binding SystemLevel, Converter={StaticResource LevelToWidthConverter}}"/>
-                    </Border>
-
-                    <!-- 볼륨 조절 -->
-                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                        <TextBlock Text="볼륨:" Foreground="{StaticResource SubTextColor}"
-                                   VerticalAlignment="Center" Width="40"/>
-                        <Slider Value="{Binding SystemVolume}"
-                                Minimum="0" Maximum="1" Width="100"
-                                VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding SystemVolume, StringFormat={}{0:P0}}"
-                                   Foreground="{StaticResource SubTextColor}"
-                                   VerticalAlignment="Center" Width="40" Margin="5,0,0,0"/>
-                    </StackPanel>
-
-                    <!-- 포함 체크 -->
-                    <CheckBox Content="녹음 포함" IsChecked="{Binding RecordSystemAudio}" Margin="0,5,0,0"/>
-                </StackPanel>
-            </Border>
-        </Grid>
-
-        <!-- 장치 선택 -->
-        <Border Grid.Row="3" Style="{StaticResource CardStyle}" Margin="20,5">
-            <StackPanel>
-                <TextBlock Text="장치 선택" FontSize="14" FontWeight="Bold"
-                           Foreground="{StaticResource TextColor}" Margin="0,0,0,10"/>
-
+            <!-- 좌측 사이드바 -->
+            <Border Grid.Column="0" Background="{StaticResource CardColor}"
+                    CornerRadius="12,0,0,12">
                 <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="마이크:"
-                               Foreground="{StaticResource SubTextColor}"
-                               VerticalAlignment="Center" Margin="0,0,10,5"/>
-                    <ComboBox Grid.Row="0" Grid.Column="1"
-                              ItemsSource="{Binding InputDevices}"
-                              SelectedItem="{Binding SelectedInputDevice}"
-                              DisplayMemberPath="FriendlyName"/>
+                    <!-- 로고 -->
+                    <TextBlock Grid.Row="0" Text="🎙️" FontSize="24"
+                               HorizontalAlignment="Center" Margin="0,20,0,30"/>
 
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="출력:"
-                               Foreground="{StaticResource SubTextColor}"
-                               VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <ComboBox Grid.Row="1" Grid.Column="1"
-                              ItemsSource="{Binding OutputDevices}"
-                              SelectedItem="{Binding SelectedOutputDevice}"
-                              DisplayMemberPath="FriendlyName"/>
+                    <!-- 네비게이션 버튼들 -->
+                    <StackPanel Grid.Row="1" HorizontalAlignment="Center">
+                        <Button Style="{StaticResource SidebarButtonStyle}"
+                                Content="🏠" ToolTip="홈"/>
+                        <Button Style="{StaticResource SidebarButtonStyle}"
+                                Content="📁" ToolTip="파일 열기"
+                                Command="{Binding OpenOutputDirectoryCommand}"/>
+                        <Button Style="{StaticResource SidebarButtonStyle}"
+                                Content="🔍" ToolTip="검색"/>
+                    </StackPanel>
+
+                    <!-- 하단 설정 -->
+                    <Button Grid.Row="2" Style="{StaticResource SidebarButtonStyle}"
+                            Content="⚙️" ToolTip="설정"
+                            Command="{Binding ToggleOptionsCommand}"
+                            Margin="0,0,0,20"/>
                 </Grid>
+            </Border>
 
-                <Button Content="🔄 장치 새로고침"
-                        Command="{Binding RefreshDevicesCommand}"
-                        HorizontalAlignment="Right"
-                        Margin="0,10,0,0"
-                        Padding="10,5"
-                        Background="Transparent"
-                        Foreground="{StaticResource SecondaryColor}"
-                        BorderThickness="0"
-                        Cursor="Hand"/>
-            </StackPanel>
-        </Border>
-
-        <!-- 녹음 컨트롤 버튼 -->
-        <Border Grid.Row="4" Style="{StaticResource CardStyle}" Margin="20,5">
-            <StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                    <!-- 녹음 시작 버튼 -->
-                    <Button Style="{StaticResource RecordButtonStyle}"
-                            Command="{Binding StartRecordingCommand}"
-                            Background="{StaticResource DangerColor}"
-                            ToolTip="녹음 시작">
-                        <TextBlock Text="⏺" FontSize="28"/>
-                    </Button>
-
-                    <!-- 일시정지 버튼 -->
-                    <Button Command="{Binding PauseRecordingCommand}"
-                            ToolTip="일시정지">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource RecordButtonStyle}">
-                                <Setter Property="Background" Value="{StaticResource WarningColor}"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding RecordingState}" Value="Paused">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding RecordingState}" Value="Stopped">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                        <TextBlock Text="⏸" FontSize="28"/>
-                    </Button>
-
-                    <!-- 재개 버튼 -->
-                    <Button Command="{Binding ResumeRecordingCommand}"
-                            ToolTip="재개">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource RecordButtonStyle}">
-                                <Setter Property="Background" Value="{StaticResource PrimaryColor}"/>
-                                <Setter Property="Visibility" Value="Collapsed"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding RecordingState}" Value="Paused">
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                        <TextBlock Text="▶" FontSize="28"/>
-                    </Button>
-
-                    <!-- 정지 버튼 -->
-                    <Button Style="{StaticResource RecordButtonStyle}"
-                            Command="{Binding StopRecordingCommand}"
-                            Background="#555"
-                            ToolTip="정지">
-                        <TextBlock Text="⏹" FontSize="28"/>
-                    </Button>
-                </StackPanel>
-
-                <!-- 저장 경로 -->
-                <StackPanel Orientation="Horizontal" Margin="0,15,0,0">
-                    <TextBlock Text="저장 경로:" Foreground="{StaticResource SubTextColor}"
-                               VerticalAlignment="Center" Margin="0,0,10,0"/>
-                    <TextBox Text="{Binding OutputDirectory}"
-                             Width="280" IsReadOnly="True"
-                             Background="#333" Foreground="{StaticResource TextColor}"
-                             BorderThickness="0" Padding="5"/>
-                    <Button Content="📁" Command="{Binding BrowseOutputDirectoryCommand}"
-                            Margin="5,0" Padding="8,3"
-                            Background="Transparent" Foreground="{StaticResource TextColor}"
-                            BorderThickness="0" Cursor="Hand" ToolTip="폴더 선택"/>
-                    <Button Content="📂" Command="{Binding OpenOutputDirectoryCommand}"
-                            Padding="8,3"
-                            Background="Transparent" Foreground="{StaticResource TextColor}"
-                            BorderThickness="0" Cursor="Hand" ToolTip="폴더 열기"/>
-                </StackPanel>
-
-                <TextBlock Text="{Binding FileInfo}"
-                           Foreground="{StaticResource SubTextColor}"
-                           FontSize="12" Margin="0,10,0,0"/>
-            </StackPanel>
-        </Border>
-
-        <!-- 최근 파일 목록 -->
-        <Border Grid.Row="5" Style="{StaticResource CardStyle}" Margin="20,5">
-            <Grid>
+            <!-- 메인 콘텐츠 영역 -->
+            <Grid Grid.Column="1" Margin="30,0">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="50"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" Text="📂 최근 녹음 파일" FontSize="14" FontWeight="Bold"
-                           Foreground="{StaticResource TextColor}" Margin="0,0,0,10"/>
+                <!-- 타이틀바 -->
+                <Grid Grid.Row="0">
+                    <TextBlock Text="AudioRecorder Pro"
+                               FontSize="14" FontWeight="SemiBold"
+                               Foreground="{StaticResource SubTextColor}"
+                               VerticalAlignment="Center"/>
 
-                <!-- 재생 컨트롤 (재생 중일 때만 표시) -->
-                <Border Grid.Row="1" Background="#252525" CornerRadius="5" Padding="10" Margin="0,0,0,10"
-                        Visibility="{Binding IsPlaying, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <StackPanel>
-                        <TextBlock Text="{Binding PlaybackTime}" Foreground="{StaticResource TextColor}"
-                                   FontSize="12" HorizontalAlignment="Center" Margin="0,0,0,5"/>
-                        <Slider Value="{Binding PlaybackPosition}" Maximum="{Binding PlaybackDuration}"
-                                Minimum="0" Height="20"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,5,0,0">
-                            <Button Content="⏸" Command="{Binding PausePlaybackCommand}"
-                                    Width="40" Height="30" Margin="5,0"
-                                    Background="{StaticResource WarningColor}" Foreground="White"
-                                    BorderThickness="0" Cursor="Hand" ToolTip="일시정지/재개"/>
-                            <Button Content="⏹" Command="{Binding StopPlaybackCommand}"
-                                    Width="40" Height="30" Margin="5,0"
-                                    Background="#555" Foreground="White"
-                                    BorderThickness="0" Cursor="Hand" ToolTip="정지"/>
-                        </StackPanel>
+                    <!-- 윈도우 컨트롤 -->
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <Button Style="{StaticResource WindowButtonStyle}"
+                                Content="─" Click="MinimizeButton_Click"/>
+                        <Button Style="{StaticResource WindowButtonStyle}"
+                                Content="□" Click="MaximizeButton_Click"/>
+                        <Button Style="{StaticResource WindowButtonStyle}"
+                                Content="✕" Click="CloseButton_Click"/>
                     </StackPanel>
+                </Grid>
+
+                <!-- 중앙 비주얼 영역 -->
+                <Grid Grid.Row="1">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 메인 비주얼 - 웨이브폼/레벨 미터 -->
+                    <Border Grid.Row="0" Background="{StaticResource CardColor}"
+                            CornerRadius="16" Margin="0,10">
+                        <Grid>
+                            <!-- 배경 그라데이션 -->
+                            <Border CornerRadius="16">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#1a1a2e" Offset="0"/>
+                                        <GradientStop Color="#16213e" Offset="0.5"/>
+                                        <GradientStop Color="#0f3460" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                            </Border>
+
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                <!-- 타이머 -->
+                                <TextBlock Text="{Binding ElapsedTime}"
+                                           FontSize="72"
+                                           FontWeight="Light"
+                                           FontFamily="Segoe UI"
+                                           Foreground="{StaticResource TextColor}"
+                                           HorizontalAlignment="Center"/>
+
+                                <!-- 상태 텍스트 -->
+                                <TextBlock Text="{Binding StatusText}"
+                                           FontSize="16"
+                                           Foreground="{StaticResource SubTextColor}"
+                                           HorizontalAlignment="Center"
+                                           Margin="0,10,0,30"/>
+
+                                <!-- 레벨 미터 바 (웨이브폼 스타일) -->
+                                <Grid Width="400" Height="60" Margin="0,20,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="20"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- 마이크 레벨 -->
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="🎤 마이크" FontSize="11"
+                                                   Foreground="{StaticResource SubTextColor}"
+                                                   HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                        <Border Background="#1a1a2e" CornerRadius="4" Height="30">
+                                            <Border Background="{StaticResource PrimaryColor}"
+                                                    CornerRadius="4"
+                                                    HorizontalAlignment="Left"
+                                                    Width="{Binding MicLevel, Converter={StaticResource LevelToWidthConverter}}"/>
+                                        </Border>
+                                        <TextBlock Text="{Binding MicLevelDb}" FontSize="10"
+                                                   Foreground="{StaticResource SubTextColor}"
+                                                   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                    </StackPanel>
+
+                                    <!-- 시스템 레벨 -->
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="🔊 시스템" FontSize="11"
+                                                   Foreground="{StaticResource SubTextColor}"
+                                                   HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                                        <Border Background="#1a1a2e" CornerRadius="4" Height="30">
+                                            <Border Background="{StaticResource AccentBrush}"
+                                                    CornerRadius="4"
+                                                    HorizontalAlignment="Left"
+                                                    Width="{Binding SystemLevel, Converter={StaticResource LevelToWidthConverter}}"/>
+                                        </Border>
+                                        <TextBlock Text="{Binding SystemLevelDb}" FontSize="10"
+                                                   Foreground="{StaticResource SubTextColor}"
+                                                   HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- 파일 정보 -->
+                    <TextBlock Grid.Row="1" Text="{Binding FileInfo}"
+                               FontSize="13"
+                               Foreground="{StaticResource SubTextColor}"
+                               HorizontalAlignment="Center"
+                               Margin="0,5"/>
+
+                    <!-- 하단 컨트롤 바 -->
+                    <Border Grid.Row="2" Background="{StaticResource CardColor}"
+                            CornerRadius="12" Padding="20,15" Margin="0,10,0,20">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- 왼쪽 - 녹음 옵션 -->
+                            <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <CheckBox Content="마이크" IsChecked="{Binding RecordMicrophone}"
+                                          Foreground="{StaticResource SubTextColor}"
+                                          Margin="0,0,15,0"/>
+                                <CheckBox Content="시스템" IsChecked="{Binding RecordSystemAudio}"
+                                          Foreground="{StaticResource SubTextColor}"/>
+                            </StackPanel>
+
+                            <!-- 중앙 - 컨트롤 버튼 -->
+                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                        HorizontalAlignment="Center">
+                                <!-- 녹음 시작 버튼 -->
+                                <Button Style="{StaticResource ControlButtonStyle}"
+                                        Command="{Binding StartRecordingCommand}"
+                                        Background="{StaticResource DangerColor}"
+                                        ToolTip="녹음 시작 (Ctrl+R)">
+                                    <TextBlock Text="⏺" FontSize="24"/>
+                                </Button>
+
+                                <!-- 일시정지/재개 버튼 -->
+                                <Button Command="{Binding PauseRecordingCommand}"
+                                        ToolTip="일시정지 (Ctrl+P)">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource ControlButtonStyle}">
+                                            <Setter Property="Background" Value="{StaticResource WarningColor}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RecordingState}" Value="Paused">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding RecordingState}" Value="Stopped">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <TextBlock Text="⏸" FontSize="24"/>
+                                </Button>
+
+                                <Button Command="{Binding ResumeRecordingCommand}"
+                                        ToolTip="재개">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource ControlButtonStyle}">
+                                            <Setter Property="Background" Value="{StaticResource PrimaryColor}"/>
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RecordingState}" Value="Paused">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <TextBlock Text="▶" FontSize="24"/>
+                                </Button>
+
+                                <!-- 정지 버튼 -->
+                                <Button Style="{StaticResource ControlButtonStyle}"
+                                        Command="{Binding StopRecordingCommand}"
+                                        Background="{StaticResource SurfaceColor}"
+                                        ToolTip="정지 (Ctrl+S)">
+                                    <TextBlock Text="⏹" FontSize="24"/>
+                                </Button>
+                            </StackPanel>
+
+                            <!-- 오른쪽 - 포맷 선택 -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                        VerticalAlignment="Center"
+                                        HorizontalAlignment="Right">
+                                <TextBlock Text="포맷:" FontSize="11"
+                                           Foreground="{StaticResource SubTextColor}"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <ComboBox ItemsSource="{Binding AvailableFormats}"
+                                          SelectedItem="{Binding SelectedRecordingFormat}"
+                                          Width="130" FontSize="11"
+                                          IsEnabled="{Binding RecordingState, Converter={StaticResource StateToEnabledConverter}}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Converter={StaticResource FormatToDisplayNameConverter}}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Grid>
+
+            <!-- 우측 패널 - 최근 파일 & 설정 -->
+            <Border Grid.Column="2" Background="{StaticResource CardColor}"
+                    CornerRadius="0,12,12,0" Padding="15">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 헤더 -->
+                    <TextBlock Grid.Row="0" Text="최근 녹음"
+                               FontSize="16" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextColor}"
+                               Margin="0,10,0,15"/>
+
+                    <!-- 재생 컨트롤 (재생 중일 때) -->
+                    <Border Grid.Row="1" Background="{StaticResource SurfaceColor}"
+                            CornerRadius="10" Padding="12" Margin="0,0,0,10"
+                            Visibility="{Binding IsPlaying, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding PlaybackTime}"
+                                       Foreground="{StaticResource TextColor}"
+                                       FontSize="12" HorizontalAlignment="Center"
+                                       Margin="0,0,0,8"/>
+                            <Slider Value="{Binding PlaybackPosition}"
+                                    Maximum="{Binding PlaybackDuration}"
+                                    Minimum="0" Height="6" Margin="0,0,0,8"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                        Content="⏸"
+                                        Command="{Binding PausePlaybackCommand}"
+                                        Background="{StaticResource WarningColor}"/>
+                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                        Content="⏹"
+                                        Command="{Binding StopPlaybackCommand}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 파일 목록 -->
+                    <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding RecentFiles, Mode=OneWay}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{StaticResource SurfaceColor}"
+                                            CornerRadius="8" Padding="12,10" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+
+                                            <!-- 파일명 -->
+                                            <TextBlock Grid.Row="0"
+                                                       Text="{Binding FileName, Mode=OneWay}"
+                                                       Foreground="{StaticResource TextColor}"
+                                                       FontSize="12" FontWeight="Medium"
+                                                       TextTrimming="CharacterEllipsis"/>
+
+                                            <!-- 파일 정보 -->
+                                            <TextBlock Grid.Row="1"
+                                                       Text="{Binding FileDetails, Mode=OneWay}"
+                                                       Foreground="{StaticResource SubTextColor}"
+                                                       FontSize="10"
+                                                       Margin="0,4,0,8"/>
+
+                                            <!-- 버튼들 -->
+                                            <StackPanel Grid.Row="2" Orientation="Horizontal">
+                                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                                        Content="▶" ToolTip="재생"
+                                                        Background="{StaticResource SecondaryColor}"
+                                                        Command="{Binding DataContext.PlayFileCommand,
+                                                            RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                                        Content="📁" ToolTip="탐색기"
+                                                        Command="{Binding DataContext.OpenInExplorerCommand,
+                                                            RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                                        Content="F" ToolTip="FLAC 변환 (무손실)"
+                                                        Background="#FF6B35"
+                                                        FontWeight="Bold" FontSize="10"
+                                                        Command="{Binding DataContext.ConvertToFlacAsyncCommand,
+                                                            RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                                        Content="M" ToolTip="MP3 320kbps"
+                                                        Background="#9C27B0"
+                                                        FontWeight="Bold" FontSize="10"
+                                                        Command="{Binding DataContext.ConvertToMp3AsyncCommand,
+                                                            RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                                        Content="🗑" ToolTip="삭제"
+                                                        Background="{StaticResource DangerColor}"
+                                                        Command="{Binding DataContext.DeleteRecordingCommand,
+                                                            RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- 빈 상태 -->
+                    <TextBlock Grid.Row="2" Text="녹음 파일이 없습니다"
+                               Foreground="{StaticResource SubTextColor}"
+                               FontSize="12"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding RecentFiles.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+            </Border>
+
+            <!-- 옵션 패널 오버레이 -->
+            <Border Grid.Column="1" Grid.ColumnSpan="2"
+                    Background="#E0000000"
+                    CornerRadius="0,12,12,0"
+                    Visibility="{Binding IsOptionsExpanded, Converter={StaticResource BoolToVisibilityConverter}}">
+                <Border Background="{StaticResource CardColor}"
+                        CornerRadius="12"
+                        Width="400" Height="350"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Padding="25">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- 헤더 -->
+                        <Grid Grid.Row="0" Margin="0,0,0,20">
+                            <TextBlock Text="⚙️ 설정" FontSize="18" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextColor}"/>
+                            <Button HorizontalAlignment="Right"
+                                    Style="{StaticResource WindowButtonStyle}"
+                                    Content="✕"
+                                    Command="{Binding ToggleOptionsCommand}"/>
+                        </Grid>
+
+                        <!-- 설정 내용 -->
+                        <StackPanel Grid.Row="1">
+                            <!-- 장치 선택 -->
+                            <TextBlock Text="🎧 장치 선택" FontSize="13" FontWeight="Medium"
+                                       Foreground="{StaticResource TextColor}" Margin="0,0,0,10"/>
+
+                            <TextBlock Text="마이크" FontSize="11"
+                                       Foreground="{StaticResource SubTextColor}" Margin="0,0,0,5"/>
+                            <ComboBox ItemsSource="{Binding InputDevices}"
+                                      SelectedItem="{Binding SelectedInputDevice}"
+                                      DisplayMemberPath="FriendlyName"
+                                      Margin="0,0,0,10"/>
+
+                            <TextBlock Text="시스템 출력" FontSize="11"
+                                       Foreground="{StaticResource SubTextColor}" Margin="0,0,0,5"/>
+                            <ComboBox ItemsSource="{Binding OutputDevices}"
+                                      SelectedItem="{Binding SelectedOutputDevice}"
+                                      DisplayMemberPath="FriendlyName"
+                                      Margin="0,0,0,10"/>
+
+                            <Button Content="🔄 장치 새로고침"
+                                    Command="{Binding RefreshDevicesCommand}"
+                                    HorizontalAlignment="Left"
+                                    Padding="10,5"
+                                    Background="Transparent"
+                                    Foreground="{StaticResource SecondaryColor}"
+                                    BorderThickness="0"
+                                    Cursor="Hand"
+                                    Margin="0,0,0,20"/>
+
+                            <!-- 저장 경로 -->
+                            <TextBlock Text="📁 저장 경로" FontSize="13" FontWeight="Medium"
+                                       Foreground="{StaticResource TextColor}" Margin="0,0,0,10"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0"
+                                         Text="{Binding OutputDirectory}"
+                                         IsReadOnly="True"
+                                         Background="{StaticResource SurfaceColor}"
+                                         Foreground="{StaticResource TextColor}"
+                                         BorderThickness="0"
+                                         Padding="10,8"
+                                         FontSize="11"/>
+                                <Button Grid.Column="1"
+                                        Content="📁"
+                                        Command="{Binding BrowseOutputDirectoryCommand}"
+                                        Style="{StaticResource SidebarButtonStyle}"
+                                        Width="36" Height="36"/>
+                            </Grid>
+                        </StackPanel>
+                    </Grid>
                 </Border>
-
-                <ScrollViewer Grid.Row="2" MaxHeight="180" VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding RecentFiles, Mode=OneWay}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#333" CornerRadius="5" Padding="10,8" Margin="0,2">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-
-                                        <StackPanel Grid.Column="0">
-                                            <TextBlock Text="{Binding FileName, Mode=OneWay}"
-                                                       Foreground="White" FontSize="12"/>
-                                            <TextBlock Text="{Binding FileDetails, Mode=OneWay}"
-                                                       Foreground="#888" FontSize="10"/>
-                                        </StackPanel>
-
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                            <Button Content="▶" ToolTip="내장 재생"
-                                                    Command="{Binding DataContext.PlayFileCommand,
-                                                        RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Width="30" Height="26" Margin="2,0"
-                                                    Background="{StaticResource SecondaryColor}"
-                                                    Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="🔊" ToolTip="기본 앱으로 열기"
-                                                    Command="{Binding DataContext.PlayWithDefaultAppCommand,
-                                                        RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Width="30" Height="26" Margin="2,0"
-                                                    Background="#555" Foreground="White"
-                                                    BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="📁" ToolTip="탐색기에서 열기"
-                                                    Command="{Binding DataContext.OpenInExplorerCommand,
-                                                        RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Width="30" Height="26" Margin="2,0"
-                                                    Background="#555" Foreground="White"
-                                                    BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="🎵" ToolTip="MP3로 변환 (FFmpeg 필요)"
-                                                    Command="{Binding DataContext.ConvertToMp3AsyncCommand,
-                                                        RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Width="30" Height="26" Margin="2,0"
-                                                    Background="#9C27B0" Foreground="White"
-                                                    BorderThickness="0" Cursor="Hand"/>
-                                            <Button Content="🗑" ToolTip="삭제"
-                                                    Command="{Binding DataContext.DeleteRecordingCommand,
-                                                        RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    Width="30" Height="26" Margin="2,0"
-                                                    Background="{StaticResource DangerColor}"
-                                                    Foreground="White" BorderThickness="0" Cursor="Hand"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-
-                <TextBlock Grid.Row="3" Text="녹음 파일이 없습니다"
-                           Foreground="{StaticResource SubTextColor}"
-                           HorizontalAlignment="Center"
-                           Margin="0,20">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding RecentFiles.Count}" Value="0">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
-            </Grid>
-        </Border>
-
-        <!-- 하단 상태바 -->
-        <Border Grid.Row="6" Background="#252525" Padding="15,8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <TextBlock Grid.Column="0" Text="{Binding StatusText}"
-                           Foreground="{StaticResource SubTextColor}" FontSize="12"/>
-                <TextBlock Grid.Column="1" Text="Ctrl+R 녹음 | Ctrl+P 일시정지 | Ctrl+S 정지"
-                           Foreground="#666" FontSize="10" Margin="0,0,15,0"
-                           VerticalAlignment="Center"/>
-                <TextBlock Grid.Column="2" Text="WAV 48kHz/16bit/Stereo"
-                           Foreground="{StaticResource SubTextColor}" FontSize="12"/>
-            </Grid>
-        </Border>
-    </Grid>
+            </Border>
+        </Grid>
+    </Border>
 </Window>

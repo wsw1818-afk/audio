@@ -8,6 +8,8 @@
             <!-- 컨버터 -->
             <converters:LevelToPercentWidthConverter x:Key="LevelToWidthConverter" MaxWidth="180"/>
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+            <converters:FormatToDisplayNameConverter x:Key="FormatToDisplayNameConverter"/>
+            <converters:StateToEnabledConverter x:Key="StateToEnabledConverter"/>
 
             <!-- 전역 색상 -->
             <SolidColorBrush x:Key="PrimaryBrush" Color="#4CAF50"/>

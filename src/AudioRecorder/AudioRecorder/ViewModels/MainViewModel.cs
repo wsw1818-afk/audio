@@ -14,7 +14,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DeviceManager _deviceManager;
     private readonly RecordingEngine _recordingEngine;
     private readonly AudioPlayer _audioPlayer;
-    private readonly Mp3ConversionService _mp3Service;
+    private readonly AudioConversionService _conversionService;
     private readonly DispatcherTimer _timer;
     private readonly DispatcherTimer _playbackTimer;
     private readonly AppSettings _settings;
@@ -82,6 +82,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private RecordingInfo? _selectedRecentFile;
 
+    // 옵션 패널
+    [ObservableProperty]
+    private bool _isOptionsExpanded = false;
+
+    // 녹음 포맷
+    [ObservableProperty]
+    private RecordingFormat _selectedRecordingFormat = RecordingFormat.WAV;
+
+    public IReadOnlyList<RecordingFormat> AvailableFormats { get; } = new[]
+    {
+        RecordingFormat.WAV,
+        RecordingFormat.FLAC,
+        RecordingFormat.MP3_320
+    };
+
     // 재생 상태
     [ObservableProperty]
     private bool _isPlaying;
@@ -100,7 +115,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _deviceManager = new DeviceManager();
         _recordingEngine = new RecordingEngine(_deviceManager);
         _audioPlayer = new AudioPlayer();
-        _mp3Service = new Mp3ConversionService();
+        _conversionService = new AudioConversionService();
         _settings = AppSettings.Load();
 
         // 설정 적용
@@ -109,6 +124,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _recordSystemAudio = _settings.RecordSystem;
         _micVolume = _settings.MicrophoneVolume;
         _systemVolume = _settings.SystemVolume;
+        _selectedRecordingFormat = _settings.RecordingFormat;
 
         // 녹음 타이머 설정 (UI 업데이트용)
         _timer = new DispatcherTimer
@@ -218,6 +234,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.SystemVolume = SystemVolume;
         _settings.LastMicrophoneId = SelectedInputDevice?.Id;
         _settings.LastSystemDeviceId = SelectedOutputDevice?.Id;
+        _settings.RecordingFormat = SelectedRecordingFormat;
         _settings.Save();
 
         SaveRecentFiles();
@@ -262,12 +279,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 OutputDeviceId = SelectedOutputDevice?.Id,
                 MicrophoneVolume = MicVolume,
                 SystemVolume = SystemVolume,
-                OutputDirectory = OutputDirectory
+                OutputDirectory = OutputDirectory,
+                Format = SelectedRecordingFormat
             };
 
             _recordingEngine.Start(options);
             _timer.Start();
-            StatusText = "녹음 중...";
+
+            var formatName = SelectedRecordingFormat.GetDisplayName();
+            StatusText = $"녹음 중... ({formatName})";
         }
         catch (Exception ex)
         {
@@ -278,24 +298,67 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool CanStartRecording() => RecordingState == RecordingState.Stopped;
 
     [RelayCommand(CanExecute = nameof(CanStopRecording))]
-    private void StopRecording()
+    private async Task StopRecordingAsync()
     {
         try
         {
-            var filePath = _recordingEngine.CurrentFilePath;
+            var wavFilePath = _recordingEngine.CurrentFilePath;
+            var targetFormat = _recordingEngine.TargetFormat;
+            var duration = _recordingEngine.ElapsedTime;
+
             _recordingEngine.Stop();
             _timer.Stop();
-            StatusText = "녹음 완료";
+
+            if (!File.Exists(wavFilePath))
+            {
+                StatusText = "녹음 파일을 찾을 수 없습니다.";
+                return;
+            }
+
+            string finalFilePath = wavFilePath;
+
+            // WAV가 아닌 포맷이면 변환 수행
+            if (targetFormat != RecordingFormat.WAV)
+            {
+                var formatName = targetFormat.GetDisplayName();
+                StatusText = $"{formatName}로 변환 중...";
+
+                var audioFormat = targetFormat == RecordingFormat.FLAC
+                    ? AudioFormat.FLAC
+                    : AudioFormat.MP3_320;
+
+                var targetExtension = targetFormat.GetExtension();
+                finalFilePath = Path.ChangeExtension(wavFilePath, targetExtension);
+
+                var success = await _conversionService.ConvertAsync(wavFilePath, audioFormat, finalFilePath);
+
+                if (success && File.Exists(finalFilePath))
+                {
+                    // 변환 성공 시 원본 WAV 삭제
+                    try { File.Delete(wavFilePath); } catch { }
+                    StatusText = $"{formatName} 변환 완료";
+                }
+                else
+                {
+                    // 변환 실패 시 WAV 유지
+                    finalFilePath = wavFilePath;
+                    StatusText = "변환 실패, WAV로 저장됨";
+                }
+            }
+            else
+            {
+                StatusText = "녹음 완료";
+            }
 
             // 최근 파일 목록에 추가
-            if (File.Exists(filePath))
+            if (File.Exists(finalFilePath))
             {
-                var fileInfo = new FileInfo(filePath);
+                var fileInfo = new FileInfo(finalFilePath);
                 var recording = new RecordingInfo
                 {
-                    FilePath = filePath,
+                    FilePath = finalFilePath,
                     RecordedAt = DateTime.Now,
-                    Duration = _recordingEngine.ElapsedTime,
+                    Duration = duration,
                     FileSize = fileInfo.Length
                 };
 
@@ -303,8 +366,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (RecentFiles.Count > 10)
                     RecentFiles.RemoveAt(RecentFiles.Count - 1);
 
-                var sizeKb = recording.FileSize / 1024.0;
-                FileInfo = $"저장됨: {recording.FileName} ({sizeKb:F1} KB)";
+                var sizeMb = recording.FileSize / (1024.0 * 1024);
+                if (sizeMb >= 1)
+                    FileInfo = $"저장됨: {recording.FileName} ({sizeMb:F1} MB)";
+                else
+                    FileInfo = $"저장됨: {recording.FileName} ({recording.FileSize / 1024.0:F1} KB)";
             }
         }
         catch (Exception ex)
@@ -338,6 +404,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         LoadDevices();
         StatusText = "장치 목록 새로고침 완료";
+    }
+
+    [RelayCommand]
+    private void ToggleOptions()
+    {
+        IsOptionsExpanded = !IsOptionsExpanded;
     }
 
     [RelayCommand]
@@ -481,45 +553,71 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task ConvertToMp3Async(RecordingInfo? recording)
     {
+        await ConvertToFormatAsync(recording, AudioFormat.MP3_320);
+    }
+
+    [RelayCommand]
+    private async Task ConvertToFlacAsync(RecordingInfo? recording)
+    {
+        await ConvertToFormatAsync(recording, AudioFormat.FLAC);
+    }
+
+    [RelayCommand]
+    private async Task ConvertToAacAsync(RecordingInfo? recording)
+    {
+        await ConvertToFormatAsync(recording, AudioFormat.AAC_256);
+    }
+
+    private async Task ConvertToFormatAsync(RecordingInfo? recording, AudioFormat format)
+    {
         if (recording == null || !File.Exists(recording.FilePath))
             return;
 
         if (!recording.FilePath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
         {
-            StatusText = "WAV 파일만 MP3로 변환할 수 있습니다.";
+            StatusText = "WAV 파일만 변환할 수 있습니다.";
             return;
         }
 
-        if (!_mp3Service.IsFFmpegAvailable)
+        if (!_conversionService.IsFFmpegAvailable)
         {
             StatusText = "FFmpeg가 설치되어 있지 않습니다. ffmpeg.exe를 앱 폴더에 복사하세요.";
             return;
         }
 
-        StatusText = $"MP3 변환 중: {recording.FileName}...";
+        var formatName = AudioConversionService.GetDisplayName(format);
+        StatusText = $"{formatName}로 변환 중: {recording.FileName}...";
 
-        _mp3Service.ConversionCompleted += OnMp3ConversionCompleted;
-        await _mp3Service.ConvertToMp3Async(recording.FilePath);
-        _mp3Service.ConversionCompleted -= OnMp3ConversionCompleted;
+        _conversionService.ConversionCompleted += OnConversionCompleted;
+        await _conversionService.ConvertAsync(recording.FilePath, format);
+        _conversionService.ConversionCompleted -= OnConversionCompleted;
     }
 
-    private void OnMp3ConversionCompleted(object? sender, Mp3ConversionCompletedEventArgs e)
+    private void OnConversionCompleted(object? sender, AudioConversionCompletedEventArgs e)
     {
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             if (e.Success)
             {
-                var savedMb = (e.OriginalSize - e.ConvertedSize) / (1024.0 * 1024);
-                StatusText = $"MP3 변환 완료! ({e.CompressionRatio:F0}% 압축, {savedMb:F1}MB 절약)";
+                var formatName = AudioConversionService.GetDisplayName(e.Format);
+                if (e.CompressionRatio > 0)
+                {
+                    var savedMb = (e.OriginalSize - e.ConvertedSize) / (1024.0 * 1024);
+                    StatusText = $"{formatName} 변환 완료! ({e.CompressionRatio:F0}% 압축, {savedMb:F1}MB 절약)";
+                }
+                else
+                {
+                    StatusText = $"{formatName} 변환 완료!";
+                }
             }
             else
             {
-                StatusText = e.ErrorMessage ?? "MP3 변환 실패";
+                StatusText = e.ErrorMessage ?? "변환 실패";
             }
         });
     }
 
-    public bool IsFFmpegAvailable => _mp3Service.IsFFmpegAvailable;
+    public bool IsFFmpegAvailable => _conversionService.IsFFmpegAvailable;
 
     private void OnPlaybackTimerTick(object? sender, EventArgs e)
     {

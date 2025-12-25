@@ -17,10 +17,20 @@ public class RecordingOptions
     public int SampleRate { get; set; } = 48000;
     public int Channels { get; set; } = 2;
     public int BitsPerSample { get; set; } = 16;
+    public RecordingFormat Format { get; set; } = RecordingFormat.WAV;
 
     public string GenerateFileName()
     {
-        return $"Recording_{DateTime.Now:yyyyMMdd_HHmmss}.wav";
+        var extension = Format.GetExtension();
+        return $"Recording_{DateTime.Now:yyyyMMdd_HHmmss}{extension}";
+    }
+
+    /// <summary>
+    /// 임시 WAV 파일명 생성 (FLAC/MP3 변환용)
+    /// </summary>
+    public string GenerateTempWavFileName()
+    {
+        return $"Recording_{DateTime.Now:yyyyMMdd_HHmmss}_temp.wav";
     }
 
     public string GetFullPath()
