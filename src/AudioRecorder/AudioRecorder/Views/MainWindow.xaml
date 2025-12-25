@@ -210,15 +210,45 @@
                     <TextBlock Grid.Row="0" Text="🎙️" FontSize="24"
                                HorizontalAlignment="Center" Margin="0,20,0,30"/>
 
-                    <!-- 네비게이션 버튼들 -->
+                    <!-- 녹화 모드 선택 -->
                     <StackPanel Grid.Row="1" HorizontalAlignment="Center">
+                        <!-- 오디오 녹음 모드 -->
+                        <Button Command="{Binding SwitchToAudioModeCommand}"
+                                ToolTip="오디오 녹음 모드">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SidebarButtonStyle}">
+                                    <Setter Property="Content" Value="🎙️"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsAudioOnlyMode}" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource PrimaryColor}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+
+                        <!-- 화면 녹화 모드 -->
+                        <Button Command="{Binding SwitchToScreenModeCommand}"
+                                ToolTip="화면 녹화 모드">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource SidebarButtonStyle}">
+                                    <Setter Property="Content" Value="🖥️"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsScreenRecordingMode}" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource DangerColor}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+
+                        <Separator Background="{StaticResource BorderColor}" Height="1" Margin="5,10"/>
+
                         <Button Style="{StaticResource SidebarButtonStyle}"
-                                Content="🏠" ToolTip="홈"/>
-                        <Button Style="{StaticResource SidebarButtonStyle}"
-                                Content="📁" ToolTip="파일 열기"
+                                Content="📁" ToolTip="출력 폴더 열기"
                                 Command="{Binding OpenOutputDirectoryCommand}"/>
-                        <Button Style="{StaticResource SidebarButtonStyle}"
-                                Content="🔍" ToolTip="검색"/>
                     </StackPanel>
 
                     <!-- 하단 설정 -->
@@ -422,23 +452,71 @@
                                 </Button>
                             </StackPanel>
 
-                            <!-- 오른쪽 - 포맷 선택 -->
+                            <!-- 오른쪽 - 모드별 옵션 -->
                             <StackPanel Grid.Column="2" Orientation="Horizontal"
                                         VerticalAlignment="Center"
                                         HorizontalAlignment="Right">
-                                <TextBlock Text="포맷:" FontSize="11"
-                                           Foreground="{StaticResource SubTextColor}"
-                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <ComboBox ItemsSource="{Binding AvailableFormats}"
-                                          SelectedItem="{Binding SelectedRecordingFormat}"
-                                          Width="130" FontSize="11"
-                                          IsEnabled="{Binding RecordingState, Converter={StaticResource StateToEnabledConverter}}">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Converter={StaticResource FormatToDisplayNameConverter}}"/>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
+
+                                <!-- 오디오 녹음 모드 옵션 -->
+                                <StackPanel Orientation="Horizontal"
+                                            Visibility="{Binding IsAudioOnlyMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <TextBlock Text="포맷:" FontSize="11"
+                                               Foreground="{StaticResource SubTextColor}"
+                                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <ComboBox ItemsSource="{Binding AvailableFormats}"
+                                              SelectedItem="{Binding SelectedRecordingFormat}"
+                                              Width="130" FontSize="11"
+                                              IsEnabled="{Binding RecordingState, Converter={StaticResource StateToEnabledConverter}}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Converter={StaticResource FormatToDisplayNameConverter}}"/>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <!-- 화면 녹화 모드 옵션 -->
+                                <StackPanel Orientation="Horizontal"
+                                            Visibility="{Binding IsScreenRecordingMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <!-- 캡처 영역 선택 -->
+                                    <Button Content="{Binding CaptureRegionText}"
+                                            FontSize="10" Padding="8,4"
+                                            Background="{StaticResource SurfaceColor}"
+                                            Foreground="{StaticResource TextColor}"
+                                            BorderThickness="0"
+                                            Margin="0,0,8,0"
+                                            IsEnabled="{Binding RecordingState, Converter={StaticResource StateToEnabledConverter}}">
+                                        <Button.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="전체 화면" Command="{Binding SelectFullScreenCommand}"/>
+                                                <MenuItem Header="창 선택..." Command="{Binding SelectWindowCommand}"/>
+                                                <MenuItem Header="영역 선택..." Command="{Binding SelectRegionCommand}"/>
+                                            </ContextMenu>
+                                        </Button.ContextMenu>
+                                        <Button.Template>
+                                            <ControlTemplate TargetType="Button">
+                                                <Border Background="{TemplateBinding Background}"
+                                                        CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                </Border>
+                                            </ControlTemplate>
+                                        </Button.Template>
+                                    </Button>
+
+                                    <!-- FPS 선택 -->
+                                    <ComboBox ItemsSource="{Binding AvailableFrameRates}"
+                                              SelectedItem="{Binding SelectedFrameRate}"
+                                              Width="60" FontSize="11"
+                                              IsEnabled="{Binding RecordingState, Converter={StaticResource StateToEnabledConverter}}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock>
+                                                    <Run Text="{Binding}"/><Run Text=" fps"/>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
                             </StackPanel>
                         </Grid>
                     </Border>

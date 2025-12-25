@@ -13,6 +13,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly DeviceManager _deviceManager;
     private readonly RecordingEngine _recordingEngine;
+    private readonly ScreenRecordingEngine _screenRecordingEngine;
     private readonly AudioPlayer _audioPlayer;
     private readonly AudioConversionService _conversionService;
     private readonly DispatcherTimer _timer;
@@ -97,6 +98,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RecordingFormat.MP3_320
     };
 
+    // 화면 녹화 모드
+    [ObservableProperty]
+    private RecordingMode _currentRecordingMode = RecordingMode.AudioOnly;
+
+    [ObservableProperty]
+    private CaptureRegion? _selectedCaptureRegion;
+
+    [ObservableProperty]
+    private VideoFormat _selectedVideoFormat = VideoFormat.MP4_H264;
+
+    [ObservableProperty]
+    private int _selectedFrameRate = 30;
+
+    [ObservableProperty]
+    private string _captureRegionText = "전체 화면";
+
+    [ObservableProperty]
+    private bool _showMouseCursor = true;
+
+    [ObservableProperty]
+    private long _frameCount;
+
+    [ObservableProperty]
+    private double _currentFps;
+
+    public IReadOnlyList<VideoFormat> AvailableVideoFormats { get; } = new[]
+    {
+        VideoFormat.MP4_H264,
+        VideoFormat.WebM_VP9,
+        VideoFormat.MKV_H264
+    };
+
+    public IReadOnlyList<int> AvailableFrameRates { get; } = new[] { 15, 24, 30, 60 };
+
+    public bool IsScreenRecordingMode => CurrentRecordingMode == RecordingMode.ScreenWithAudio;
+    public bool IsAudioOnlyMode => CurrentRecordingMode == RecordingMode.AudioOnly;
+    public bool IsScreenRecordingAvailable => _screenRecordingEngine.IsFFmpegAvailable;
+
     // 재생 상태
     [ObservableProperty]
     private bool _isPlaying;
@@ -114,6 +153,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _deviceManager = new DeviceManager();
         _recordingEngine = new RecordingEngine(_deviceManager);
+        _screenRecordingEngine = new ScreenRecordingEngine(_deviceManager);
         _audioPlayer = new AudioPlayer();
         _conversionService = new AudioConversionService();
         _settings = AppSettings.Load();
@@ -140,11 +180,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
         _playbackTimer.Tick += OnPlaybackTimerTick;
 
-        // 이벤트 연결
+        // 오디오 녹음 이벤트 연결
         _recordingEngine.LevelUpdated += OnLevelUpdated;
         _recordingEngine.StateChanged += OnStateChanged;
         _recordingEngine.ErrorOccurred += OnErrorOccurred;
         _audioPlayer.PlaybackStopped += OnPlaybackStopped;
+
+        // 화면 녹화 이벤트 연결
+        _screenRecordingEngine.LevelUpdated += OnLevelUpdated;
+        _screenRecordingEngine.StateChanged += OnScreenRecordingStateChanged;
+        _screenRecordingEngine.ErrorOccurred += OnErrorOccurred;
+        _screenRecordingEngine.RecordingCompleted += OnScreenRecordingCompleted;
+
+        // 기본 캡처 영역 설정 (전체 화면)
+        _selectedCaptureRegion = new CaptureRegion { Type = CaptureRegionType.FullScreen };
 
         // 장치 목록 로드
         LoadDevices();
@@ -271,28 +320,70 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            var options = new RecordingOptions
+            if (CurrentRecordingMode == RecordingMode.ScreenWithAudio)
             {
-                RecordMicrophone = RecordMicrophone,
-                RecordSystemAudio = RecordSystemAudio,
-                MicrophoneDeviceId = SelectedInputDevice?.Id,
-                OutputDeviceId = SelectedOutputDevice?.Id,
-                MicrophoneVolume = MicVolume,
-                SystemVolume = SystemVolume,
-                OutputDirectory = OutputDirectory,
-                Format = SelectedRecordingFormat
-            };
-
-            _recordingEngine.Start(options);
-            _timer.Start();
-
-            var formatName = SelectedRecordingFormat.GetDisplayName();
-            StatusText = $"녹음 중... ({formatName})";
+                // 화면 녹화 모드
+                StartScreenRecording();
+            }
+            else
+            {
+                // 오디오 녹음 모드
+                StartAudioRecording();
+            }
         }
         catch (Exception ex)
         {
-            StatusText = $"녹음 시작 실패: {ex.Message}";
+            StatusText = $"녹음/녹화 시작 실패: {ex.Message}";
         }
+    }
+
+    private void StartAudioRecording()
+    {
+        var options = new RecordingOptions
+        {
+            RecordMicrophone = RecordMicrophone,
+            RecordSystemAudio = RecordSystemAudio,
+            MicrophoneDeviceId = SelectedInputDevice?.Id,
+            OutputDeviceId = SelectedOutputDevice?.Id,
+            MicrophoneVolume = MicVolume,
+            SystemVolume = SystemVolume,
+            OutputDirectory = OutputDirectory,
+            Format = SelectedRecordingFormat
+        };
+
+        _recordingEngine.Start(options);
+        _timer.Start();
+
+        var formatName = SelectedRecordingFormat.GetDisplayName();
+        StatusText = $"녹음 중... ({formatName})";
+    }
+
+    private void StartScreenRecording()
+    {
+        if (SelectedCaptureRegion == null)
+        {
+            SelectedCaptureRegion = new CaptureRegion { Type = CaptureRegionType.FullScreen };
+        }
+
+        var options = new ScreenRecordingOptions
+        {
+            Region = SelectedCaptureRegion,
+            FrameRate = SelectedFrameRate,
+            VideoFormat = SelectedVideoFormat,
+            OutputDirectory = OutputDirectory,
+            IncludeMicrophone = RecordMicrophone,
+            IncludeSystemAudio = RecordSystemAudio,
+            MicrophoneVolume = MicVolume,
+            SystemVolume = SystemVolume,
+            MicrophoneDeviceId = SelectedInputDevice?.Id,
+            OutputDeviceId = SelectedOutputDevice?.Id,
+            ShowMouseCursor = ShowMouseCursor
+        };
+
+        _screenRecordingEngine.Start(options);
+        _timer.Start();
+
+        StatusText = $"화면 녹화 중... ({CaptureRegionText}, {SelectedFrameRate}fps)";
     }
 
     private bool CanStartRecording() => RecordingState == RecordingState.Stopped;
@@ -302,80 +393,97 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            var wavFilePath = _recordingEngine.CurrentFilePath;
-            var targetFormat = _recordingEngine.TargetFormat;
-            var duration = _recordingEngine.ElapsedTime;
-
-            _recordingEngine.Stop();
             _timer.Stop();
 
-            if (!File.Exists(wavFilePath))
+            if (CurrentRecordingMode == RecordingMode.ScreenWithAudio)
             {
-                StatusText = "녹음 파일을 찾을 수 없습니다.";
-                return;
-            }
-
-            string finalFilePath = wavFilePath;
-
-            // WAV가 아닌 포맷이면 변환 수행
-            if (targetFormat != RecordingFormat.WAV)
-            {
-                var formatName = targetFormat.GetDisplayName();
-                StatusText = $"{formatName}로 변환 중...";
-
-                var audioFormat = targetFormat == RecordingFormat.FLAC
-                    ? AudioFormat.FLAC
-                    : AudioFormat.MP3_320;
-
-                var targetExtension = targetFormat.GetExtension();
-                finalFilePath = Path.ChangeExtension(wavFilePath, targetExtension);
-
-                var success = await _conversionService.ConvertAsync(wavFilePath, audioFormat, finalFilePath);
-
-                if (success && File.Exists(finalFilePath))
-                {
-                    // 변환 성공 시 원본 WAV 삭제
-                    try { File.Delete(wavFilePath); } catch { }
-                    StatusText = $"{formatName} 변환 완료";
-                }
-                else
-                {
-                    // 변환 실패 시 WAV 유지
-                    finalFilePath = wavFilePath;
-                    StatusText = "변환 실패, WAV로 저장됨";
-                }
+                // 화면 녹화 중지
+                StatusText = "녹화 저장 중...";
+                await _screenRecordingEngine.StopAsync();
+                // 완료 이벤트에서 결과 처리
             }
             else
             {
-                StatusText = "녹음 완료";
-            }
-
-            // 최근 파일 목록에 추가
-            if (File.Exists(finalFilePath))
-            {
-                var fileInfo = new FileInfo(finalFilePath);
-                var recording = new RecordingInfo
-                {
-                    FilePath = finalFilePath,
-                    RecordedAt = DateTime.Now,
-                    Duration = duration,
-                    FileSize = fileInfo.Length
-                };
-
-                RecentFiles.Insert(0, recording);
-                if (RecentFiles.Count > 10)
-                    RecentFiles.RemoveAt(RecentFiles.Count - 1);
-
-                var sizeMb = recording.FileSize / (1024.0 * 1024);
-                if (sizeMb >= 1)
-                    FileInfo = $"저장됨: {recording.FileName} ({sizeMb:F1} MB)";
-                else
-                    FileInfo = $"저장됨: {recording.FileName} ({recording.FileSize / 1024.0:F1} KB)";
+                // 오디오 녹음 중지
+                await StopAudioRecordingAsync();
             }
         }
         catch (Exception ex)
         {
-            StatusText = $"녹음 중지 실패: {ex.Message}";
+            StatusText = $"녹음/녹화 중지 실패: {ex.Message}";
+        }
+    }
+
+    private async Task StopAudioRecordingAsync()
+    {
+        var wavFilePath = _recordingEngine.CurrentFilePath;
+        var targetFormat = _recordingEngine.TargetFormat;
+        var duration = _recordingEngine.ElapsedTime;
+
+        _recordingEngine.Stop();
+
+        if (!File.Exists(wavFilePath))
+        {
+            StatusText = "녹음 파일을 찾을 수 없습니다.";
+            return;
+        }
+
+        string finalFilePath = wavFilePath;
+
+        // WAV가 아닌 포맷이면 변환 수행
+        if (targetFormat != RecordingFormat.WAV)
+        {
+            var formatName = targetFormat.GetDisplayName();
+            StatusText = $"{formatName}로 변환 중...";
+
+            var audioFormat = targetFormat == RecordingFormat.FLAC
+                ? AudioFormat.FLAC
+                : AudioFormat.MP3_320;
+
+            var targetExtension = targetFormat.GetExtension();
+            finalFilePath = Path.ChangeExtension(wavFilePath, targetExtension);
+
+            var success = await _conversionService.ConvertAsync(wavFilePath, audioFormat, finalFilePath);
+
+            if (success && File.Exists(finalFilePath))
+            {
+                // 변환 성공 시 원본 WAV 삭제
+                try { File.Delete(wavFilePath); } catch { }
+                StatusText = $"{formatName} 변환 완료";
+            }
+            else
+            {
+                // 변환 실패 시 WAV 유지
+                finalFilePath = wavFilePath;
+                StatusText = "변환 실패, WAV로 저장됨";
+            }
+        }
+        else
+        {
+            StatusText = "녹음 완료";
+        }
+
+        // 최근 파일 목록에 추가
+        if (File.Exists(finalFilePath))
+        {
+            var fileInfo = new FileInfo(finalFilePath);
+            var recording = new RecordingInfo
+            {
+                FilePath = finalFilePath,
+                RecordedAt = DateTime.Now,
+                Duration = duration,
+                FileSize = fileInfo.Length
+            };
+
+            RecentFiles.Insert(0, recording);
+            if (RecentFiles.Count > 10)
+                RecentFiles.RemoveAt(RecentFiles.Count - 1);
+
+            var sizeMb = recording.FileSize / (1024.0 * 1024);
+            if (sizeMb >= 1)
+                FileInfo = $"저장됨: {recording.FileName} ({sizeMb:F1} MB)";
+            else
+                FileInfo = $"저장됨: {recording.FileName} ({recording.FileSize / 1024.0:F1} KB)";
         }
     }
 
@@ -384,7 +492,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanPauseRecording))]
     private void PauseRecording()
     {
-        _recordingEngine.Pause();
+        if (CurrentRecordingMode == RecordingMode.ScreenWithAudio)
+        {
+            _screenRecordingEngine.Pause();
+        }
+        else
+        {
+            _recordingEngine.Pause();
+        }
         StatusText = "일시정지";
     }
 
@@ -393,8 +508,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanResumeRecording))]
     private void ResumeRecording()
     {
-        _recordingEngine.Resume();
-        StatusText = "녹음 중...";
+        if (CurrentRecordingMode == RecordingMode.ScreenWithAudio)
+        {
+            _screenRecordingEngine.Resume();
+            StatusText = "화면 녹화 중...";
+        }
+        else
+        {
+            _recordingEngine.Resume();
+            StatusText = "녹음 중...";
+        }
     }
 
     private bool CanResumeRecording() => RecordingState == RecordingState.Paused;
@@ -660,18 +783,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnTimerTick(object? sender, EventArgs e)
     {
-        ElapsedTime = _recordingEngine.ElapsedTime.ToString(@"hh\:mm\:ss");
-
-        // 파일 크기 업데이트
-        if (RecordingState == RecordingState.Recording && File.Exists(_recordingEngine.CurrentFilePath))
+        if (CurrentRecordingMode == RecordingMode.ScreenWithAudio)
         {
-            try
+            // 화면 녹화 모드
+            ElapsedTime = _screenRecordingEngine.ElapsedTime.ToString(@"hh\:mm\:ss");
+            FrameCount = _screenRecordingEngine.FrameCount;
+            CurrentFps = _screenRecordingEngine.CurrentFps;
+            FileInfo = $"프레임: {FrameCount:N0} | FPS: {CurrentFps:F1}";
+        }
+        else
+        {
+            // 오디오 녹음 모드
+            ElapsedTime = _recordingEngine.ElapsedTime.ToString(@"hh\:mm\:ss");
+
+            // 파일 크기 업데이트
+            if (RecordingState == RecordingState.Recording && File.Exists(_recordingEngine.CurrentFilePath))
             {
-                var fileInfo = new FileInfo(_recordingEngine.CurrentFilePath);
-                var sizeMb = fileInfo.Length / (1024.0 * 1024);
-                FileInfo = $"파일: {sizeMb:F1} MB";
+                try
+                {
+                    var fileInfo = new FileInfo(_recordingEngine.CurrentFilePath);
+                    var sizeMb = fileInfo.Length / (1024.0 * 1024);
+                    FileInfo = $"파일: {sizeMb:F1} MB";
+                }
+                catch { }
             }
-            catch { }
         }
     }
 
@@ -707,6 +842,137 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
+    private void OnScreenRecordingStateChanged(object? sender, RecordingStateChangedEventArgs e)
+    {
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            RecordingState = e.State;
+            StartRecordingCommand.NotifyCanExecuteChanged();
+            StopRecordingCommand.NotifyCanExecuteChanged();
+            PauseRecordingCommand.NotifyCanExecuteChanged();
+            ResumeRecordingCommand.NotifyCanExecuteChanged();
+        });
+    }
+
+    private void OnScreenRecordingCompleted(object? sender, ScreenRecordingCompletedEventArgs e)
+    {
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (e.Success)
+            {
+                var fileInfo = new FileInfo(e.OutputPath);
+                var sizeMb = fileInfo.Length / (1024.0 * 1024);
+
+                StatusText = e.Warning ?? $"녹화 완료: {sizeMb:F1} MB";
+                FileInfo = $"저장됨: {Path.GetFileName(e.OutputPath)}";
+
+                // 최근 파일 목록에 추가
+                var recording = new RecordingInfo
+                {
+                    FilePath = e.OutputPath,
+                    RecordedAt = DateTime.Now,
+                    Duration = e.Duration,
+                    FileSize = fileInfo.Length
+                };
+
+                RecentFiles.Insert(0, recording);
+                if (RecentFiles.Count > 10)
+                    RecentFiles.RemoveAt(RecentFiles.Count - 1);
+            }
+            else
+            {
+                StatusText = e.ErrorMessage ?? "녹화 실패";
+            }
+        });
+    }
+
+    partial void OnCurrentRecordingModeChanged(RecordingMode value)
+    {
+        OnPropertyChanged(nameof(IsScreenRecordingMode));
+        OnPropertyChanged(nameof(IsAudioOnlyMode));
+    }
+
+    #region 화면 녹화 커맨드
+
+    [RelayCommand]
+    private void SwitchToAudioMode()
+    {
+        if (RecordingState != RecordingState.Stopped) return;
+        CurrentRecordingMode = RecordingMode.AudioOnly;
+        StatusText = "오디오 녹음 모드";
+    }
+
+    [RelayCommand]
+    private void SwitchToScreenMode()
+    {
+        if (RecordingState != RecordingState.Stopped) return;
+
+        if (!_screenRecordingEngine.IsFFmpegAvailable)
+        {
+            StatusText = "FFmpeg가 필요합니다. ffmpeg.exe를 앱 폴더에 복사하세요.";
+            return;
+        }
+
+        CurrentRecordingMode = RecordingMode.ScreenWithAudio;
+        StatusText = "화면 녹화 모드";
+    }
+
+    [RelayCommand]
+    private void SelectFullScreen()
+    {
+        SelectedCaptureRegion = new CaptureRegion
+        {
+            Type = CaptureRegionType.FullScreen,
+            MonitorIndex = 0
+        };
+        CaptureRegionText = "전체 화면";
+        StatusText = "전체 화면 선택됨";
+    }
+
+    [RelayCommand]
+    private void SelectWindow()
+    {
+        var dialog = new Views.WindowPickerDialog();
+        dialog.Owner = System.Windows.Application.Current.MainWindow;
+
+        if (dialog.ShowDialog() == true && dialog.SelectedRegion != null)
+        {
+            SelectedCaptureRegion = dialog.SelectedRegion;
+            CaptureRegionText = SelectedCaptureRegion.WindowTitle ?? "선택된 창";
+            StatusText = $"창 선택됨: {CaptureRegionText}";
+        }
+    }
+
+    [RelayCommand]
+    private void SelectRegion()
+    {
+        // 메인 창 최소화
+        var mainWindow = System.Windows.Application.Current.MainWindow;
+        var previousState = mainWindow.WindowState;
+        mainWindow.WindowState = System.Windows.WindowState.Minimized;
+
+        // 잠시 대기 후 영역 선택 창 표시
+        Task.Delay(300).ContinueWith(_ =>
+        {
+            System.Windows.Application.Current.Dispatcher.Invoke(() =>
+            {
+                var selector = new Views.RegionSelectorWindow();
+
+                if (selector.ShowDialog() == true && selector.SelectedRegion != null)
+                {
+                    SelectedCaptureRegion = selector.SelectedRegion;
+                    CaptureRegionText = $"영역 ({SelectedCaptureRegion.Bounds.Width}x{SelectedCaptureRegion.Bounds.Height})";
+                    StatusText = $"영역 선택됨: {CaptureRegionText}";
+                }
+
+                // 메인 창 복원
+                mainWindow.WindowState = previousState;
+            });
+        });
+    }
+
+    #endregion
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -718,5 +984,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _playbackTimer.Stop();
         _audioPlayer.Dispose();
         _recordingEngine.Dispose();
+        _screenRecordingEngine.Dispose();
     }
 }
