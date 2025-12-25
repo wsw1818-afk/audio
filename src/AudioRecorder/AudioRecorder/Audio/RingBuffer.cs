@@ -3,21 +3,20 @@ using System.Runtime.InteropServices;
 namespace AudioRecorder.Audio;
 
 /// <summary>
-/// 스레드 세이프 링 버퍼 - 오디오 데이터 버퍼링용
+/// 고성능 스레드 세이프 링 버퍼 - 오디오 데이터 버퍼링용
+/// Array.Copy/Span.CopyTo를 사용한 블록 전송으로 성능 최적화
 /// </summary>
 public class RingBuffer
 {
     private readonly float[] _buffer;
     private readonly object _lock = new();
-    private volatile int _writePosition;
-    private volatile int _readPosition;
-    private volatile int _count;
+    private int _writePosition;
+    private int _readPosition;
+    private int _count;
 
     public int Capacity { get; }
-
-    // lock-free read for checking (approximate count is OK)
-    public int Count => _count;
-    public int FreeSpace => Capacity - _count;
+    public int Count { get { lock (_lock) return _count; } }
+    public int FreeSpace { get { lock (_lock) return Capacity - _count; } }
 
     public RingBuffer(int capacity)
     {
@@ -26,28 +25,31 @@ public class RingBuffer
     }
 
     /// <summary>
-    /// 데이터 쓰기
+    /// 데이터 쓰기 - Array.Copy 사용으로 최적화
     /// </summary>
     public int Write(float[] data, int offset, int count)
     {
         lock (_lock)
         {
-            int toWrite = Math.Min(count, FreeSpace);
+            int toWrite = Math.Min(count, Capacity - _count);
             if (toWrite == 0) return 0;
 
-            for (int i = 0; i < toWrite; i++)
+            int firstPart = Math.Min(toWrite, Capacity - _writePosition);
+            Array.Copy(data, offset, _buffer, _writePosition, firstPart);
+
+            if (firstPart < toWrite)
             {
-                _buffer[_writePosition] = data[offset + i];
-                _writePosition = (_writePosition + 1) % Capacity;
+                Array.Copy(data, offset + firstPart, _buffer, 0, toWrite - firstPart);
             }
 
+            _writePosition = (_writePosition + toWrite) % Capacity;
             _count += toWrite;
             return toWrite;
         }
     }
 
     /// <summary>
-    /// 바이트 배열에서 float로 변환하여 쓰기 (32-bit float)
+    /// 바이트 배열에서 float로 변환하여 쓰기 - Span 기반 제로카피
     /// </summary>
     public int WriteFromBytes(byte[] data, int bytesCount)
     {
@@ -55,25 +57,27 @@ public class RingBuffer
 
         lock (_lock)
         {
-            int toWrite = Math.Min(sampleCount, FreeSpace);
+            int toWrite = Math.Min(sampleCount, Capacity - _count);
             if (toWrite == 0) return 0;
 
-            // Span을 사용한 빠른 변환
             var floatSpan = MemoryMarshal.Cast<byte, float>(data.AsSpan(0, toWrite * 4));
 
-            for (int i = 0; i < toWrite; i++)
+            int firstPart = Math.Min(toWrite, Capacity - _writePosition);
+            floatSpan.Slice(0, firstPart).CopyTo(_buffer.AsSpan(_writePosition, firstPart));
+
+            if (firstPart < toWrite)
             {
-                _buffer[_writePosition] = floatSpan[i];
-                _writePosition = (_writePosition + 1) % Capacity;
+                floatSpan.Slice(firstPart).CopyTo(_buffer.AsSpan(0, toWrite - firstPart));
             }
 
+            _writePosition = (_writePosition + toWrite) % Capacity;
             _count += toWrite;
             return toWrite;
         }
     }
 
     /// <summary>
-    /// 데이터 읽기
+    /// 데이터 읽기 - Array.Copy 사용으로 최적화
     /// </summary>
     public int Read(float[] data, int offset, int count)
     {
@@ -82,35 +86,17 @@ public class RingBuffer
             int toRead = Math.Min(count, _count);
             if (toRead == 0) return 0;
 
-            for (int i = 0; i < toRead; i++)
+            int firstPart = Math.Min(toRead, Capacity - _readPosition);
+            Array.Copy(_buffer, _readPosition, data, offset, firstPart);
+
+            if (firstPart < toRead)
             {
-                data[offset + i] = _buffer[_readPosition];
-                _readPosition = (_readPosition + 1) % Capacity;
+                Array.Copy(_buffer, 0, data, offset + firstPart, toRead - firstPart);
             }
 
+            _readPosition = (_readPosition + toRead) % Capacity;
             _count -= toRead;
             return toRead;
-        }
-    }
-
-    /// <summary>
-    /// 데이터 읽기 (제거하지 않고 peek)
-    /// </summary>
-    public int Peek(float[] data, int offset, int count)
-    {
-        lock (_lock)
-        {
-            int toPeek = Math.Min(count, _count);
-            if (toPeek == 0) return 0;
-
-            int pos = _readPosition;
-            for (int i = 0; i < toPeek; i++)
-            {
-                data[offset + i] = _buffer[pos];
-                pos = (pos + 1) % Capacity;
-            }
-
-            return toPeek;
         }
     }
 
@@ -129,18 +115,24 @@ public class RingBuffer
     }
 
     /// <summary>
-    /// 무음 삽입 (드리프트 보정용)
+    /// 무음 삽입 - Array.Clear 사용으로 최적화
     /// </summary>
     public int InsertSilence(int count)
     {
         lock (_lock)
         {
-            int toInsert = Math.Min(count, FreeSpace);
-            for (int i = 0; i < toInsert; i++)
+            int toInsert = Math.Min(count, Capacity - _count);
+            if (toInsert == 0) return 0;
+
+            int firstPart = Math.Min(toInsert, Capacity - _writePosition);
+            Array.Clear(_buffer, _writePosition, firstPart);
+
+            if (firstPart < toInsert)
             {
-                _buffer[_writePosition] = 0f;
-                _writePosition = (_writePosition + 1) % Capacity;
+                Array.Clear(_buffer, 0, toInsert - firstPart);
             }
+
+            _writePosition = (_writePosition + toInsert) % Capacity;
             _count += toInsert;
             return toInsert;
         }
@@ -156,7 +148,6 @@ public class RingBuffer
             _writePosition = 0;
             _readPosition = 0;
             _count = 0;
-            Array.Clear(_buffer, 0, Capacity);
         }
     }
 }

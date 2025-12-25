@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using AudioRecorder.Models;
@@ -7,8 +8,9 @@ using AudioRecorder.Models;
 namespace AudioRecorder.Audio;
 
 /// <summary>
-/// 녹음 엔진 - 마이크/시스템 오디오 캡처 및 믹싱
+/// 고성능 녹음 엔진 - 마이크/시스템 오디오 캡처 및 믹싱
 /// Ring Buffer와 SyncManager를 사용한 안정적인 동시 녹음 지원
+/// 버퍼 재사용으로 GC 압력 최소화
 /// </summary>
 public class RecordingEngine : IDisposable
 {
@@ -50,6 +52,16 @@ public class RecordingEngine : IDisposable
     // 레벨 업데이트 쓰로틀링
     private DateTime _lastLevelUpdate = DateTime.MinValue;
     private const int LEVEL_UPDATE_INTERVAL_MS = 50;
+
+    // 재사용 버퍼 (GC 압력 최소화)
+    private const int CHUNK_SIZE = 1920; // 20ms at 48kHz stereo
+    private readonly float[] _mixMicData = new float[CHUNK_SIZE];
+    private readonly float[] _mixSysData = new float[CHUNK_SIZE];
+    private readonly float[] _mixBuffer = new float[CHUNK_SIZE];
+    private readonly byte[] _outputBuffer = new byte[CHUNK_SIZE * 2];
+
+    // 단독 녹음용 재사용 버퍼
+    private byte[]? _soloOutputBuffer;
 
     public RecordingState State { get; private set; } = RecordingState.Stopped;
     public TimeSpan ElapsedTime => _stopwatch.Elapsed;
@@ -364,15 +376,10 @@ public class RecordingEngine : IDisposable
     }
 
     /// <summary>
-    /// 싱크 보정이 적용된 믹싱 루프
+    /// 싱크 보정이 적용된 믹싱 루프 (재사용 버퍼 사용)
     /// </summary>
     private void MixingLoopWithSync()
     {
-        const int CHUNK_SIZE = 1920; // 20ms at 48kHz stereo
-        var micData = new float[CHUNK_SIZE];
-        var sysData = new float[CHUNK_SIZE];
-        var mixBuffer = new float[CHUNK_SIZE];
-
         try
         {
             while (_isRunning)
@@ -400,22 +407,23 @@ public class RecordingEngine : IDisposable
                         SyncDiagnosticsUpdated?.Invoke(this, diagnostics);
                     }
 
-                    // 데이터 읽기
-                    int micRead = _micBuffer.Read(micData, 0, CHUNK_SIZE);
-                    int sysRead = _systemBuffer.Read(sysData, 0, CHUNK_SIZE);
+                    // 데이터 읽기 (재사용 버퍼)
+                    int micRead = _micBuffer.Read(_mixMicData, 0, CHUNK_SIZE);
+                    int sysRead = _systemBuffer.Read(_mixSysData, 0, CHUNK_SIZE);
 
                     int samplesToMix = Math.Min(micRead, sysRead);
 
-                    // 믹싱
+                    // 믹싱 (벡터화 가능한 루프)
+                    float micVol = MicVolume;
+                    float sysVol = SystemVolume;
                     for (int i = 0; i < samplesToMix; i++)
                     {
-                        float micSample = micData[i] * MicVolume;
-                        float sysSample = sysData[i] * SystemVolume;
-                        mixBuffer[i] = Math.Clamp(micSample + sysSample, -1.0f, 1.0f);
+                        float mixed = _mixMicData[i] * micVol + _mixSysData[i] * sysVol;
+                        _mixBuffer[i] = Math.Clamp(mixed, -1.0f, 1.0f);
                     }
 
-                    // 파일 쓰기
-                    WriteMixedToFile(mixBuffer, samplesToMix);
+                    // 파일 쓰기 (재사용 버퍼)
+                    WriteMixedToFile(_mixBuffer, samplesToMix);
                 }
                 else
                 {
@@ -455,32 +463,30 @@ public class RecordingEngine : IDisposable
     }
 
     /// <summary>
-    /// 남은 버퍼 데이터 플러시
+    /// 남은 버퍼 데이터 플러시 (재사용 버퍼 사용)
     /// </summary>
     private void FlushRemainingBuffers()
     {
         if (_writer == null) return;
 
-        const int CHUNK_SIZE = 1920;
-        var micData = new float[CHUNK_SIZE];
-        var sysData = new float[CHUNK_SIZE];
-        var mixBuffer = new float[CHUNK_SIZE];
+        float micVol = MicVolume;
+        float sysVol = SystemVolume;
 
         while (_micBuffer.Count > 0 || _systemBuffer.Count > 0)
         {
-            int micRead = _micBuffer.Read(micData, 0, CHUNK_SIZE);
-            int sysRead = _systemBuffer.Read(sysData, 0, CHUNK_SIZE);
+            int micRead = _micBuffer.Read(_mixMicData, 0, CHUNK_SIZE);
+            int sysRead = _systemBuffer.Read(_mixSysData, 0, CHUNK_SIZE);
 
             int samplesToMix = Math.Max(micRead, sysRead);
 
             for (int i = 0; i < samplesToMix; i++)
             {
-                float micSample = i < micRead ? micData[i] * MicVolume : 0;
-                float sysSample = i < sysRead ? sysData[i] * SystemVolume : 0;
-                mixBuffer[i] = Math.Clamp(micSample + sysSample, -1.0f, 1.0f);
+                float micSample = i < micRead ? _mixMicData[i] * micVol : 0;
+                float sysSample = i < sysRead ? _mixSysData[i] * sysVol : 0;
+                _mixBuffer[i] = Math.Clamp(micSample + sysSample, -1.0f, 1.0f);
             }
 
-            WriteMixedToFile(mixBuffer, samplesToMix);
+            WriteMixedToFile(_mixBuffer, samplesToMix);
         }
     }
 
@@ -489,19 +495,27 @@ public class RecordingEngine : IDisposable
         if (_writer == null) return;
 
         int sampleCount = bytesRecorded / 4;
-        var outputBuffer = new byte[sampleCount * 2];
+        int outputSize = sampleCount * 2;
+
+        // 필요시 버퍼 재할당 (일반적으로 한 번만 발생)
+        if (_soloOutputBuffer == null || _soloOutputBuffer.Length < outputSize)
+        {
+            _soloOutputBuffer = new byte[outputSize];
+        }
+
+        // Span 기반 변환 (제로카피)
+        var floatSpan = MemoryMarshal.Cast<byte, float>(buffer.AsSpan(0, bytesRecorded));
+        var shortSpan = MemoryMarshal.Cast<byte, short>(_soloOutputBuffer.AsSpan(0, outputSize));
 
         for (int i = 0; i < sampleCount; i++)
         {
-            float sample = BitConverter.ToSingle(buffer, i * 4) * volume;
-            sample = Math.Clamp(sample, -1.0f, 1.0f);
-            short pcmSample = (short)(sample * 32767);
-            BitConverter.TryWriteBytes(outputBuffer.AsSpan(i * 2), pcmSample);
+            float sample = Math.Clamp(floatSpan[i] * volume, -1.0f, 1.0f);
+            shortSpan[i] = (short)(sample * 32767);
         }
 
         lock (_writeLock)
         {
-            _writer?.Write(outputBuffer, 0, outputBuffer.Length);
+            _writer?.Write(_soloOutputBuffer, 0, outputSize);
         }
     }
 
@@ -509,18 +523,17 @@ public class RecordingEngine : IDisposable
     {
         if (_writer == null || sampleCount == 0) return;
 
-        var outputBuffer = new byte[sampleCount * 2];
+        int outputSize = sampleCount * 2;
+        var shortSpan = MemoryMarshal.Cast<byte, short>(_outputBuffer.AsSpan(0, outputSize));
 
         for (int i = 0; i < sampleCount; i++)
         {
-            float sample = Math.Clamp(mixBuffer[i], -1.0f, 1.0f);
-            short pcmSample = (short)(sample * 32767);
-            BitConverter.TryWriteBytes(outputBuffer.AsSpan(i * 2), pcmSample);
+            shortSpan[i] = (short)(mixBuffer[i] * 32767);
         }
 
         lock (_writeLock)
         {
-            _writer?.Write(outputBuffer, 0, outputBuffer.Length);
+            _writer?.Write(_outputBuffer, 0, outputSize);
         }
     }
 
