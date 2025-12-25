@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.deps.json
+*.runtimeconfig.json
+
+# FFmpeg (too large)
+ffmpeg.exe
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# Debug
+debug.log
+
+# Claude
+.claude/
+.commit_message.txt

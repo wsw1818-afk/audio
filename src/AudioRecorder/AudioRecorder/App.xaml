@@ -1,0 +1,23 @@
+<Application x:Class="AudioRecorder.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="clr-namespace:AudioRecorder.Converters"
+             StartupUri="Views/MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- 컨버터 -->
+            <converters:LevelToPercentWidthConverter x:Key="LevelToWidthConverter" MaxWidth="180"/>
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+
+            <!-- 전역 색상 -->
+            <SolidColorBrush x:Key="PrimaryBrush" Color="#4CAF50"/>
+            <SolidColorBrush x:Key="SecondaryBrush" Color="#2196F3"/>
+            <SolidColorBrush x:Key="DangerBrush" Color="#F44336"/>
+            <SolidColorBrush x:Key="WarningBrush" Color="#FF9800"/>
+            <SolidColorBrush x:Key="BackgroundBrush" Color="#1E1E1E"/>
+            <SolidColorBrush x:Key="CardBrush" Color="#2D2D2D"/>
+            <SolidColorBrush x:Key="TextBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="SubTextBrush" Color="#AAAAAA"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
