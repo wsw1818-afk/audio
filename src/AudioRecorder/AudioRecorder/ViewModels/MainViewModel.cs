@@ -20,6 +20,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _playbackTimer;
     private readonly AppSettings _settings;
     private bool _disposed;
+    private bool _isStoppingScreenRecording; // 화면 녹화 정지 진행 중 플래그
 
     // 녹음 상태
     [ObservableProperty]
@@ -200,6 +201,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 최근 파일 목록 로드
         LoadRecentFiles();
+
+        // 초기 모드 UI 업데이트 (바인딩 초기화를 위해)
+        OnPropertyChanged(nameof(IsAudioOnlyMode));
+        OnPropertyChanged(nameof(IsScreenRecordingMode));
     }
 
     private void LoadRecentFiles()
@@ -330,6 +335,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 // 오디오 녹음 모드
                 StartAudioRecording();
             }
+
+            // 녹음/녹화 중에는 모드 전환 비활성화
+            SwitchToAudioModeCommand.NotifyCanExecuteChanged();
+            SwitchToScreenModeCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(CanSwitchModeBinding));
         }
         catch (Exception ex)
         {
@@ -354,12 +364,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _recordingEngine.Start(options);
         _timer.Start();
 
+        // 수동으로 상태 업데이트
+        RecordingState = RecordingState.Recording;
         var formatName = SelectedRecordingFormat.GetDisplayName();
         StatusText = $"녹음 중... ({formatName})";
     }
 
     private void StartScreenRecording()
     {
+        System.Diagnostics.Debug.WriteLine($"[ViewModel] StartScreenRecording 호출됨");
+
         if (SelectedCaptureRegion == null)
         {
             SelectedCaptureRegion = new CaptureRegion { Type = CaptureRegionType.FullScreen };
@@ -380,27 +394,56 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ShowMouseCursor = ShowMouseCursor
         };
 
-        _screenRecordingEngine.Start(options);
-        _timer.Start();
+        System.Diagnostics.Debug.WriteLine($"[ViewModel] 화면 녹화 옵션 - 영역: {options.Region.Type}, FPS: {options.FrameRate}, 출력: {options.OutputDirectory}");
 
-        StatusText = $"화면 녹화 중... ({CaptureRegionText}, {SelectedFrameRate}fps)";
+        try
+        {
+            _screenRecordingEngine.Start(options);
+            _timer.Start();
+
+            // 수동으로 상태 업데이트 (이벤트가 비동기로 처리될 수 있음)
+            RecordingState = RecordingState.Recording;
+            StatusText = $"화면 녹화 중... ({CaptureRegionText}, {SelectedFrameRate}fps)";
+            System.Diagnostics.Debug.WriteLine($"[ViewModel] 화면 녹화 시작 완료 - StatusText: {StatusText}");
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"화면 녹화 실패: {ex.Message}";
+            System.Diagnostics.Debug.WriteLine($"[ViewModel] 화면 녹화 실패: {ex.Message}");
+            throw;
+        }
     }
 
-    private bool CanStartRecording() => RecordingState == RecordingState.Stopped;
+    private bool CanStartRecording() => RecordingState == RecordingState.Stopped && !_isStoppingScreenRecording;
 
     [RelayCommand(CanExecute = nameof(CanStopRecording))]
     private async Task StopRecordingAsync()
     {
+        System.Diagnostics.Debug.WriteLine("[ViewModel] StopRecordingAsync 시작");
         try
         {
             _timer.Stop();
 
             if (CurrentRecordingMode == RecordingMode.ScreenWithAudio)
             {
-                // 화면 녹화 중지
-                StatusText = "녹화 저장 중...";
+                // 화면 녹화 중지 - StopAsync는 캡처만 정지하고 즉시 반환
+                // 인코딩은 백그라운드에서 진행되며 RecordingCompleted 이벤트로 결과 통보
+                StatusText = "녹화 정지 중...";
+                System.Diagnostics.Debug.WriteLine("[ViewModel] StopAsync 호출 전");
                 await _screenRecordingEngine.StopAsync();
-                // 완료 이벤트에서 결과 처리
+                System.Diagnostics.Debug.WriteLine("[ViewModel] StopAsync 완료 - 캡처 정지됨, 인코딩은 백그라운드에서 진행");
+
+                // StopAsync 이후 상태는 이미 Stopped으로 변경됨 (ScreenRecordingEngine에서 처리)
+                // 버튼 활성화
+                _isStoppingScreenRecording = false;
+                RecordingState = RecordingState.Stopped;
+                StatusText = "인코딩 중... (백그라운드)";
+                StartRecordingCommand.NotifyCanExecuteChanged();
+                StopRecordingCommand.NotifyCanExecuteChanged();
+                SwitchToAudioModeCommand.NotifyCanExecuteChanged();
+                SwitchToScreenModeCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(CanSwitchModeBinding));
+                System.Diagnostics.Debug.WriteLine("[ViewModel] 버튼 활성화 완료");
             }
             else
             {
@@ -410,7 +453,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[ViewModel] StopRecordingAsync 예외: {ex.Message}");
             StatusText = $"녹음/녹화 중지 실패: {ex.Message}";
+            _isStoppingScreenRecording = false;
+            RecordingState = RecordingState.Stopped;
+            StartRecordingCommand.NotifyCanExecuteChanged();
+            StopRecordingCommand.NotifyCanExecuteChanged();
+            SwitchToAudioModeCommand.NotifyCanExecuteChanged();
+            SwitchToScreenModeCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(CanSwitchModeBinding));
         }
     }
 
@@ -487,7 +538,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private bool CanStopRecording() => RecordingState != RecordingState.Stopped;
+    private bool CanStopRecording() => RecordingState == RecordingState.Recording || RecordingState == RecordingState.Paused;
 
     [RelayCommand(CanExecute = nameof(CanPauseRecording))]
     private void PauseRecording()
@@ -894,19 +945,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     #region 화면 녹화 커맨드
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanSwitchMode))]
     private void SwitchToAudioMode()
     {
-        if (RecordingState != RecordingState.Stopped) return;
         CurrentRecordingMode = RecordingMode.AudioOnly;
         StatusText = "오디오 녹음 모드";
+        OnPropertyChanged(nameof(IsScreenRecordingMode));
+        OnPropertyChanged(nameof(IsAudioOnlyMode));
     }
 
-    [RelayCommand]
+    private bool CanSwitchMode() => RecordingState == RecordingState.Stopped && !_isStoppingScreenRecording;
+
+    // XAML 바인딩용 프로퍼티
+    public bool CanSwitchModeBinding => CanSwitchMode();
+
+    [RelayCommand(CanExecute = nameof(CanSwitchMode))]
     private void SwitchToScreenMode()
     {
-        if (RecordingState != RecordingState.Stopped) return;
-
         if (!_screenRecordingEngine.IsFFmpegAvailable)
         {
             StatusText = "FFmpeg가 필요합니다. ffmpeg.exe를 앱 폴더에 복사하세요.";
@@ -915,6 +970,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         CurrentRecordingMode = RecordingMode.ScreenWithAudio;
         StatusText = "화면 녹화 모드";
+        OnPropertyChanged(nameof(IsScreenRecordingMode));
+        OnPropertyChanged(nameof(IsAudioOnlyMode));
     }
 
     [RelayCommand]

@@ -104,6 +104,8 @@ public class ScreenCaptureService : IDisposable
         _frameWidth = bounds.Width;
         _frameHeight = bounds.Height;
 
+        Debug.WriteLine($"[ScreenCapture] 캡처 시작 - 영역: {bounds}, 프레임레이트: {_frameRate}fps");
+
         if (_frameWidth <= 0 || _frameHeight <= 0)
             throw new ArgumentException("캡처 영역이 유효하지 않습니다.");
 
@@ -117,6 +119,7 @@ public class ScreenCaptureService : IDisposable
             Name = "ScreenCaptureThread"
         };
         _captureThread.Start();
+        Debug.WriteLine($"[ScreenCapture] 캡처 스레드 시작됨");
     }
 
     /// <summary>

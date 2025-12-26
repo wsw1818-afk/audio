@@ -101,40 +101,20 @@ public class VideoEncoderService : IDisposable
         _tempAudioPath = Path.Combine(Path.GetDirectoryName(outputPath) ?? "",
             $"temp_audio_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
-        // FFmpeg 프로세스 시작
-        var codec = GetCodec(format, useHardwareEncoding);
-        var containerFormat = format.GetExtension().TrimStart('.');
-
-        // 하드웨어 인코딩 옵션
-        string hwAccelArgs = "";
-        if (useHardwareEncoding)
-        {
-            // NVIDIA NVENC 사용 시도
-            hwAccelArgs = "-hwaccel cuda -hwaccel_output_format cuda ";
-        }
-
+        // 소프트웨어 인코딩 (libx264) 사용 - 호환성 최우선
         var arguments = $"-y -f rawvideo -pix_fmt bgra -s {width}x{height} -r {frameRate} -i - " +
-                        $"{hwAccelArgs}" +
-                        $"-c:v {codec} -preset fast -b:v {bitrate} " +
-                        $"-pix_fmt yuv420p " +
-                        $"-movflags +faststart " +
-                        $"\"{outputPath}\"";
-
-        // 하드웨어 인코딩 실패 시 소프트웨어로 폴백
-        if (!TryStartFFmpeg(arguments))
-        {
-            // 소프트웨어 인코딩으로 재시도
-            arguments = $"-y -f rawvideo -pix_fmt bgra -s {width}x{height} -r {frameRate} -i - " +
                         $"-c:v libx264 -preset fast -b:v {bitrate} " +
                         $"-pix_fmt yuv420p " +
                         $"-movflags +faststart " +
                         $"\"{outputPath}\"";
 
-            if (!TryStartFFmpeg(arguments))
-            {
-                _isEncoding = false;
-                throw new InvalidOperationException("FFmpeg 프로세스를 시작할 수 없습니다.");
-            }
+        Debug.WriteLine($"[VideoEncoder] FFmpeg 시작: {FFmpegPath}");
+        Debug.WriteLine($"[VideoEncoder] 인자: {arguments}");
+
+        if (!TryStartFFmpeg(arguments))
+        {
+            _isEncoding = false;
+            throw new InvalidOperationException("FFmpeg 프로세스를 시작할 수 없습니다.");
         }
     }
 
@@ -145,6 +125,8 @@ public class VideoEncoderService : IDisposable
     {
         try
         {
+            Debug.WriteLine($"[VideoEncoder] FFmpeg 시작 시도 - 경로: {FFmpegPath}, 존재: {File.Exists(FFmpegPath)}");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = FFmpegPath,
@@ -158,7 +140,12 @@ public class VideoEncoderService : IDisposable
 
             _ffmpegProcess = Process.Start(startInfo);
             if (_ffmpegProcess == null)
+            {
+                Debug.WriteLine("[VideoEncoder] FFmpeg 프로세스가 null입니다!");
                 return false;
+            }
+
+            Debug.WriteLine($"[VideoEncoder] FFmpeg 프로세스 시작됨: PID={_ffmpegProcess.Id}");
 
             _pipeWriter = new BinaryWriter(_ffmpegProcess.StandardInput.BaseStream);
 
@@ -169,7 +156,7 @@ public class VideoEncoderService : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"FFmpeg 시작 실패: {ex.Message}");
+            Debug.WriteLine($"[VideoEncoder] FFmpeg 시작 실패: {ex.Message}\n{ex.StackTrace}");
             return false;
         }
     }
@@ -203,23 +190,34 @@ public class VideoEncoderService : IDisposable
         catch { }
     }
 
+    private long _writtenFrameCount;
+
     /// <summary>
     /// 프레임 쓰기
     /// </summary>
     public void WriteFrame(byte[] frameData)
     {
-        if (!_isEncoding || _pipeWriter == null) return;
+        if (!_isEncoding || _pipeWriter == null)
+        {
+            Debug.WriteLine($"[VideoEncoder] WriteFrame 스킵 - isEncoding: {_isEncoding}, pipeWriter: {_pipeWriter != null}");
+            return;
+        }
 
         try
         {
             lock (_writeLock)
             {
                 _pipeWriter.Write(frameData);
+                _writtenFrameCount++;
+                if (_writtenFrameCount % 30 == 0) // 매 30프레임마다 로그
+                {
+                    Debug.WriteLine($"[VideoEncoder] 프레임 {_writtenFrameCount}개 전송 완료 ({frameData.Length} bytes)");
+                }
             }
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"프레임 쓰기 실패: {ex.Message}");
+            Debug.WriteLine($"[VideoEncoder] 프레임 쓰기 실패: {ex.Message}");
         }
     }
 
@@ -296,7 +294,8 @@ public class VideoEncoderService : IDisposable
             using var process = Process.Start(startInfo);
             if (process == null) return false;
 
-            await process.WaitForExitAsync();
+            // 30초 타임아웃으로 합성 완료 대기
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
             return process.ExitCode == 0;
         }
         catch (Exception ex)

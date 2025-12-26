@@ -151,4 +151,35 @@ public partial class MainWindow : Window
     {
         Close();
     }
+
+    // 오디오 녹음 모드 버튼
+    private void AudioModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm && vm.SwitchToAudioModeCommand.CanExecute(null))
+        {
+            vm.SwitchToAudioModeCommand.Execute(null);
+            UpdateModePanel(false);
+        }
+    }
+
+    // 화면 녹화 모드 버튼
+    private void ScreenModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm && vm.SwitchToScreenModeCommand.CanExecute(null))
+        {
+            vm.SwitchToScreenModeCommand.Execute(null);
+            UpdateModePanel(true);
+        }
+    }
+
+    // 모드 패널 전환
+    private void UpdateModePanel(bool isScreenMode)
+    {
+        AudioOptionsPanel.Visibility = isScreenMode ? Visibility.Collapsed : Visibility.Visible;
+        ScreenOptionsPanel.Visibility = isScreenMode ? Visibility.Visible : Visibility.Collapsed;
+
+        // 레이아웃 강제 갱신
+        AudioOptionsPanel.UpdateLayout();
+        ScreenOptionsPanel.UpdateLayout();
+    }
 }

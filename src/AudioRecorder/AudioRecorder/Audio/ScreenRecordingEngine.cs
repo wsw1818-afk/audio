@@ -107,8 +107,8 @@ public class ScreenRecordingEngine : IDisposable
     /// </summary>
     public void Start(ScreenRecordingOptions options)
     {
-        if (State != RecordingState.Stopped)
-            throw new InvalidOperationException("이미 녹화 중입니다.");
+        if (State != RecordingState.Stopped || _isStopping)
+            throw new InvalidOperationException("이미 녹화 중이거나 정지 작업이 진행 중입니다.");
 
         if (!_videoEncoder.IsFFmpegAvailable)
             throw new InvalidOperationException("FFmpeg를 찾을 수 없습니다. ffmpeg.exe를 앱 폴더에 복사하세요.");
@@ -168,57 +168,126 @@ public class ScreenRecordingEngine : IDisposable
         }
     }
 
-    /// <summary>
-    /// 녹화 중지
-    /// </summary>
-    public async Task StopAsync()
-    {
-        if (State == RecordingState.Stopped)
-            return;
+    // 정지 작업 진행 중 플래그
+    private volatile bool _isStopping;
 
+    // 인코딩 진행 중 플래그
+    private volatile bool _isEncoding;
+
+    /// <summary>
+    /// 인코딩 진행 중 여부
+    /// </summary>
+    public bool IsEncoding => _isEncoding;
+
+    /// <summary>
+    /// 녹화 중지 - 캡처만 즉시 정지하고 인코딩은 백그라운드에서 진행
+    /// </summary>
+    public Task StopAsync()
+    {
+        if (State == RecordingState.Stopped || _isStopping)
+            return Task.CompletedTask;
+
+        Debug.WriteLine("[ScreenRecording] StopAsync 시작");
+        _isStopping = true;
         _isRecording = false;
         _isPaused = false;
-        State = RecordingState.Stopped;
+        State = RecordingState.Stopping;
 
         try
         {
-            // 화면 캡처 중지
+            Debug.WriteLine("[ScreenRecording] 화면 캡처 중지...");
             _screenCapture.Stop();
 
-            // 오디오 캡처 중지
+            Debug.WriteLine("[ScreenRecording] 오디오 캡처 중지...");
             StopAudioCapture();
 
-            // 오디오 믹싱 스레드 종료 대기
+            Debug.WriteLine("[ScreenRecording] 오디오 믹싱 스레드 종료 대기...");
             _audioDataEvent.Set();
             _audioMixingThread?.Join(2000);
 
-            // 비디오 인코더 중지
-            await _videoEncoder.StopEncodingAsync();
-
             _stopwatch.Stop();
+            var recordedDuration = _stopwatch.Elapsed;
+            var recordedFrameCount = _screenCapture.FrameCount;
 
-            // 오디오와 비디오 합성
+            // 캡처 정지 완료 - 즉시 상태 변경하여 UI 활성화
+            Debug.WriteLine("[ScreenRecording] 캡처 정지 완료, 상태를 Stopped로 변경");
+            Cleanup();
+            State = RecordingState.Stopped;
+            _isStopping = false;
+            OnStateChanged();
+
+            // 인코딩은 백그라운드에서 진행
+            _isEncoding = true;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await EncodeAndMuxAsync(recordedDuration, recordedFrameCount);
+                }
+                finally
+                {
+                    _isEncoding = false;
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[ScreenRecording] StopAsync 예외: {ex.Message}");
+            OnError($"녹화 중지 실패: {ex.Message}");
+            Cleanup();
+            State = RecordingState.Stopped;
+            _isStopping = false;
+            _isEncoding = false;
+            OnStateChanged();
+
+            RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
+            {
+                Success = false,
+                ErrorMessage = ex.Message
+            });
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 백그라운드에서 인코딩 및 합성 수행
+    /// </summary>
+    private async Task EncodeAndMuxAsync(TimeSpan recordedDuration, long recordedFrameCount)
+    {
+        Debug.WriteLine("[ScreenRecording] 백그라운드 인코딩 시작...");
+
+        try
+        {
+            Debug.WriteLine("[ScreenRecording] 비디오 인코더 중지...");
+            await _videoEncoder.StopEncodingAsync();
+            Debug.WriteLine("[ScreenRecording] 비디오 인코더 중지 완료");
+
+            Debug.WriteLine($"[ScreenRecording] 파일 확인 - video: {File.Exists(_videoPath)}, audio: {File.Exists(_audioPath)}");
+
             if (File.Exists(_videoPath) && File.Exists(_audioPath))
             {
+                Debug.WriteLine("[ScreenRecording] 오디오/비디오 합성 시작...");
                 var muxSuccess = await _videoEncoder.MuxAudioVideoAsync(_videoPath, _audioPath, _finalOutputPath);
+                Debug.WriteLine($"[ScreenRecording] 합성 결과: {muxSuccess}");
 
                 if (muxSuccess && File.Exists(_finalOutputPath))
                 {
-                    // 임시 파일 삭제
+                    Debug.WriteLine("[ScreenRecording] 임시 파일 삭제...");
                     try { File.Delete(_videoPath); } catch { }
                     try { File.Delete(_audioPath); } catch { }
 
+                    Debug.WriteLine("[ScreenRecording] RecordingCompleted 이벤트 발생...");
                     RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                     {
                         Success = true,
                         OutputPath = _finalOutputPath,
-                        Duration = _stopwatch.Elapsed,
-                        FrameCount = _screenCapture.FrameCount
+                        Duration = recordedDuration,
+                        FrameCount = recordedFrameCount
                     });
                 }
                 else
                 {
-                    // 합성 실패 시 비디오만 유지
                     if (File.Exists(_videoPath))
                     {
                         File.Move(_videoPath, _finalOutputPath, true);
@@ -228,23 +297,22 @@ public class ScreenRecordingEngine : IDisposable
                     {
                         Success = true,
                         OutputPath = _finalOutputPath,
-                        Duration = _stopwatch.Elapsed,
-                        FrameCount = _screenCapture.FrameCount,
+                        Duration = recordedDuration,
+                        FrameCount = recordedFrameCount,
                         Warning = "오디오 합성 실패 - 비디오만 저장됨"
                     });
                 }
             }
             else if (File.Exists(_videoPath))
             {
-                // 오디오 없이 비디오만 저장
                 File.Move(_videoPath, _finalOutputPath, true);
 
                 RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                 {
                     Success = true,
                     OutputPath = _finalOutputPath,
-                    Duration = _stopwatch.Elapsed,
-                    FrameCount = _screenCapture.FrameCount
+                    Duration = recordedDuration,
+                    FrameCount = recordedFrameCount
                 });
             }
             else
@@ -258,18 +326,16 @@ public class ScreenRecordingEngine : IDisposable
         }
         catch (Exception ex)
         {
-            OnError($"녹화 중지 실패: {ex.Message}");
+            Debug.WriteLine($"[ScreenRecording] 인코딩 예외: {ex.Message}");
+            OnError($"인코딩 실패: {ex.Message}");
             RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
             {
                 Success = false,
                 ErrorMessage = ex.Message
             });
         }
-        finally
-        {
-            Cleanup();
-            OnStateChanged();
-        }
+
+        Debug.WriteLine("[ScreenRecording] 백그라운드 인코딩 완료");
     }
 
     /// <summary>
@@ -576,14 +642,26 @@ public class ScreenRecordingEngine : IDisposable
 
     #region 화면 캡처 이벤트
 
+    private long _receivedFrameCount;
+
     private void OnFrameAvailable(object? sender, FrameEventArgs e)
     {
+        _receivedFrameCount++;
+        if (_receivedFrameCount % 30 == 0)
+        {
+            Debug.WriteLine($"[ScreenRecording] 프레임 수신: {_receivedFrameCount}, isRecording: {_isRecording}, isPaused: {_isPaused}");
+        }
+
         if (!_isRecording || _isPaused) return;
 
         var frameData = _screenCapture.GetCurrentFrame();
         if (frameData != null)
         {
             _videoEncoder.WriteFrame(frameData);
+        }
+        else
+        {
+            Debug.WriteLine($"[ScreenRecording] 프레임 데이터가 null입니다!");
         }
     }
 
