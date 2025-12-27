@@ -110,13 +110,110 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private VideoFormat _selectedVideoFormat = VideoFormat.MP4_H264;
 
     [ObservableProperty]
-    private int _selectedFrameRate = 30;
+    private string _selectedVideoQuality = "고화질";
+
+    // 품질 옵션 (FPS + CRF 통합) - 2개만
+    // 최고 화질: 60fps, CRF 15 (부드럽고 선명)
+    // 고화질: 30fps, CRF 20 (일반적인 고화질)
+    public IReadOnlyList<string> VideoQualityOptions { get; } = new[] { "고화질", "최고 화질" };
+
+    // 품질을 FPS로 변환
+    public int GetFpsFromQuality() => SelectedVideoQuality switch
+    {
+        "최고 화질" => 60,
+        "고화질" => 30,
+        _ => 30
+    };
+
+    // 품질을 CRF 값으로 변환
+    public int GetCrfFromQuality() => SelectedVideoQuality switch
+    {
+        "최고 화질" => 15,
+        "고화질" => 20,
+        _ => 20
+    };
 
     [ObservableProperty]
     private string _captureRegionText = "전체 화면";
 
     [ObservableProperty]
     private bool _showMouseCursor = true;
+
+    // ========== 1단계: UI 옵션 ==========
+    [ObservableProperty]
+    private bool _highlightMouseClicks = false;
+
+    [ObservableProperty]
+    private int _countdownSeconds = 3;
+
+    [ObservableProperty]
+    private bool _showRecordingBorder = true;
+
+    public IReadOnlyList<int> CountdownOptions { get; } = new[] { 0, 3, 5, 10 };
+
+    // ========== 2단계: FFmpeg 옵션 ==========
+    [ObservableProperty]
+    private string _selectedResolution = "원본";
+
+    [ObservableProperty]
+    private string _selectedAudioBitrate = "192 kbps";
+
+    public IReadOnlyList<string> ResolutionOptions { get; } = new[] { "원본", "1080p", "720p", "480p" };
+    public IReadOnlyList<string> AudioBitrateOptions { get; } = new[] { "128 kbps", "192 kbps", "320 kbps" };
+
+    // ========== 3단계: 고급 기능 ==========
+    [ObservableProperty]
+    private bool _enableWebcamOverlay = false;
+
+    [ObservableProperty]
+    private string _selectedWebcamPosition = "우하단";
+
+    [ObservableProperty]
+    private string _selectedWebcamSize = "소";
+
+    [ObservableProperty]
+    private string _watermarkText = "";
+
+    [ObservableProperty]
+    private string _selectedWatermarkPosition = "우하단";
+
+    [ObservableProperty]
+    private bool _enableScheduledRecording = false;
+
+    [ObservableProperty]
+    private DateTime _scheduledStartTime = DateTime.Now.AddMinutes(5);
+
+    [ObservableProperty]
+    private int _scheduledDurationMinutes = 10;
+
+    // ========== 일반 설정 ==========
+    [ObservableProperty]
+    private CloseAction _closeAction = CloseAction.MinimizeToTray;
+
+    public IReadOnlyList<string> CloseActionOptions { get; } = new[] { "트레이로 최소화", "즉시 종료" };
+
+    // CloseAction을 문자열로 변환 (UI 바인딩용)
+    public string SelectedCloseActionText
+    {
+        get => CloseAction switch
+        {
+            CloseAction.MinimizeToTray => "트레이로 최소화",
+            CloseAction.ExitImmediately => "즉시 종료",
+            _ => "트레이로 최소화"
+        };
+        set
+        {
+            CloseAction = value switch
+            {
+                "즉시 종료" => CloseAction.ExitImmediately,
+                _ => CloseAction.MinimizeToTray
+            };
+            OnPropertyChanged();
+        }
+    }
+
+    public IReadOnlyList<string> PositionOptions { get; } = new[] { "좌상단", "우상단", "좌하단", "우하단" };
+    public IReadOnlyList<string> WebcamSizeOptions { get; } = new[] { "소", "중", "대" };
 
     [ObservableProperty]
     private long _frameCount;
@@ -135,7 +232,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public bool IsScreenRecordingMode => CurrentRecordingMode == RecordingMode.ScreenWithAudio;
     public bool IsAudioOnlyMode => CurrentRecordingMode == RecordingMode.AudioOnly;
+    public string RecentFilesHeader => IsScreenRecordingMode ? "최근 녹화" : "최근 녹음";
     public bool IsScreenRecordingAvailable => _screenRecordingEngine.IsFFmpegAvailable;
+
+    // 현재 모드에 맞는 파일만 필터링하여 표시
+    public IEnumerable<RecordingInfo> FilteredRecentFiles =>
+        IsScreenRecordingMode
+            ? RecentFiles.Where(r => r.IsVideo)
+            : RecentFiles.Where(r => !r.IsVideo);
+
+    // 빈 상태 메시지
+    public string EmptyFilesMessage => IsScreenRecordingMode ? "녹화 파일이 없습니다" : "녹음 파일이 없습니다";
+    public bool HasNoFilteredFiles => !FilteredRecentFiles.Any();
 
     // 재생 상태
     [ObservableProperty]
@@ -166,6 +274,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _micVolume = _settings.MicrophoneVolume;
         _systemVolume = _settings.SystemVolume;
         _selectedRecordingFormat = _settings.RecordingFormat;
+        _closeAction = _settings.CloseAction;
 
         // 녹음 타이머 설정 (UI 업데이트용)
         _timer = new DispatcherTimer
@@ -205,6 +314,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 초기 모드 UI 업데이트 (바인딩 초기화를 위해)
         OnPropertyChanged(nameof(IsAudioOnlyMode));
         OnPropertyChanged(nameof(IsScreenRecordingMode));
+        OnPropertyChanged(nameof(RecentFilesHeader));
+        OnPropertyChanged(nameof(FilteredRecentFiles));
+        OnPropertyChanged(nameof(EmptyFilesMessage));
+        OnPropertyChanged(nameof(HasNoFilteredFiles));
     }
 
     private void LoadRecentFiles()
@@ -243,6 +356,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     }
                     catch { }
                 }
+
+                // 필터링된 목록 업데이트
+                OnPropertyChanged(nameof(FilteredRecentFiles));
+                OnPropertyChanged(nameof(HasNoFilteredFiles));
             }
         }
         catch { }
@@ -289,6 +406,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.LastMicrophoneId = SelectedInputDevice?.Id;
         _settings.LastSystemDeviceId = SelectedOutputDevice?.Id;
         _settings.RecordingFormat = SelectedRecordingFormat;
+        _settings.CloseAction = CloseAction;
         _settings.Save();
 
         SaveRecentFiles();
@@ -317,9 +435,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(CanStartRecording))]
     private void StartRecording()
     {
+        System.Diagnostics.Debug.WriteLine($"[ViewModel] StartRecording() 호출됨 - Mode: {CurrentRecordingMode}, Mic: {RecordMicrophone}, Sys: {RecordSystemAudio}");
+
         if (!RecordMicrophone && !RecordSystemAudio)
         {
             StatusText = "마이크 또는 시스템 오디오 중 하나 이상을 선택하세요";
+            System.Diagnostics.Debug.WriteLine("[ViewModel] StartRecording() - 오디오 소스 없음, 반환");
             return;
         }
 
@@ -370,7 +491,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = $"녹음 중... ({formatName})";
     }
 
-    private void StartScreenRecording()
+    private async void StartScreenRecording()
     {
         System.Diagnostics.Debug.WriteLine($"[ViewModel] StartScreenRecording 호출됨");
 
@@ -382,8 +503,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var options = new ScreenRecordingOptions
         {
             Region = SelectedCaptureRegion,
-            FrameRate = SelectedFrameRate,
+            FrameRate = GetFpsFromQuality(),
             VideoFormat = SelectedVideoFormat,
+            VideoCrf = GetCrfFromQuality(),
             OutputDirectory = OutputDirectory,
             IncludeMicrophone = RecordMicrophone,
             IncludeSystemAudio = RecordSystemAudio,
@@ -391,19 +513,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
             SystemVolume = SystemVolume,
             MicrophoneDeviceId = SelectedInputDevice?.Id,
             OutputDeviceId = SelectedOutputDevice?.Id,
-            ShowMouseCursor = ShowMouseCursor
+            ShowMouseCursor = ShowMouseCursor,
+            // 1단계 옵션
+            HighlightMouseClicks = HighlightMouseClicks,
+            CountdownSeconds = CountdownSeconds,
+            ShowRecordingBorder = ShowRecordingBorder
         };
 
         System.Diagnostics.Debug.WriteLine($"[ViewModel] 화면 녹화 옵션 - 영역: {options.Region.Type}, FPS: {options.FrameRate}, 출력: {options.OutputDirectory}");
 
         try
         {
+            // 카운트다운 표시 (0보다 크면)
+            if (CountdownSeconds > 0)
+            {
+                StatusText = $"녹화 시작 대기 중... ({CountdownSeconds}초)";
+                var countdownWindow = new Views.CountdownWindow(CountdownSeconds);
+                var result = await countdownWindow.StartCountdownAsync();
+
+                if (!result)
+                {
+                    StatusText = "녹화가 취소되었습니다.";
+                    return;
+                }
+            }
+
             _screenRecordingEngine.Start(options);
             _timer.Start();
 
             // 수동으로 상태 업데이트 (이벤트가 비동기로 처리될 수 있음)
             RecordingState = RecordingState.Recording;
-            StatusText = $"화면 녹화 중... ({CaptureRegionText}, {SelectedFrameRate}fps)";
+            StatusText = $"화면 녹화 중... ({CaptureRegionText}, {GetFpsFromQuality()}fps)";
             System.Diagnostics.Debug.WriteLine($"[ViewModel] 화면 녹화 시작 완료 - StatusText: {StatusText}");
         }
         catch (Exception ex)
@@ -530,12 +670,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (RecentFiles.Count > 10)
                 RecentFiles.RemoveAt(RecentFiles.Count - 1);
 
+            // 필터링된 목록 업데이트
+            OnPropertyChanged(nameof(FilteredRecentFiles));
+            OnPropertyChanged(nameof(HasNoFilteredFiles));
+
             var sizeMb = recording.FileSize / (1024.0 * 1024);
             if (sizeMb >= 1)
                 FileInfo = $"저장됨: {recording.FileName} ({sizeMb:F1} MB)";
             else
                 FileInfo = $"저장됨: {recording.FileName} ({recording.FileSize / 1024.0:F1} KB)";
         }
+
+        // 녹음 완료 후 상태 및 모드 전환 버튼 활성화
+        _isStoppingScreenRecording = false; // 플래그 초기화
+        RecordingState = RecordingState.Stopped;
+
+        // 모든 커맨드 상태 갱신
+        StartRecordingCommand.NotifyCanExecuteChanged();
+        StopRecordingCommand.NotifyCanExecuteChanged();
+        PauseRecordingCommand.NotifyCanExecuteChanged();
+        ResumeRecordingCommand.NotifyCanExecuteChanged();
+        SwitchToAudioModeCommand.NotifyCanExecuteChanged();
+        SwitchToScreenModeCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(CanSwitchModeBinding));
+
+        System.Diagnostics.Debug.WriteLine($"[ViewModel] 오디오 녹음 완료 - CanSwitchModeBinding: {CanSwitchModeBinding}");
+
+        // 최근 파일 목록 저장
+        SaveRecentFiles();
     }
 
     private bool CanStopRecording() => RecordingState == RecordingState.Recording || RecordingState == RecordingState.Paused;
@@ -618,6 +780,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (recording == null || !File.Exists(recording.FilePath))
             return;
 
+        // 비디오 파일은 기본 앱으로 열기
+        if (recording.IsVideo)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = recording.FilePath,
+                    UseShellExecute = true
+                });
+                StatusText = $"재생 중: {recording.FileName}";
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"재생 실패: {ex.Message}";
+            }
+            return;
+        }
+
+        // 오디오 파일은 내장 플레이어로 재생
         try
         {
             if (IsPlaying)
@@ -709,6 +891,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // 목록에서 제거
         RecentFiles.Remove(recording);
+
+        // 필터링된 목록 업데이트
+        OnPropertyChanged(nameof(FilteredRecentFiles));
+        OnPropertyChanged(nameof(HasNoFilteredFiles));
     }
 
     [RelayCommand]
@@ -929,6 +1115,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 RecentFiles.Insert(0, recording);
                 if (RecentFiles.Count > 10)
                     RecentFiles.RemoveAt(RecentFiles.Count - 1);
+
+                // 필터링된 목록 업데이트
+                OnPropertyChanged(nameof(FilteredRecentFiles));
+                OnPropertyChanged(nameof(HasNoFilteredFiles));
+
+                // 최근 파일 목록 저장
+                SaveRecentFiles();
             }
             else
             {
@@ -937,10 +1130,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
+    // RecordingState가 변경될 때 CanSwitchModeBinding 갱신
+    partial void OnRecordingStateChanged(RecordingState value)
+    {
+        System.Diagnostics.Debug.WriteLine($"[ViewModel] RecordingState changed to: {value}");
+        OnPropertyChanged(nameof(CanSwitchModeBinding));
+        SwitchToAudioModeCommand.NotifyCanExecuteChanged();
+        SwitchToScreenModeCommand.NotifyCanExecuteChanged();
+    }
+
     partial void OnCurrentRecordingModeChanged(RecordingMode value)
     {
         OnPropertyChanged(nameof(IsScreenRecordingMode));
         OnPropertyChanged(nameof(IsAudioOnlyMode));
+        OnPropertyChanged(nameof(RecentFilesHeader));
+        OnPropertyChanged(nameof(FilteredRecentFiles));
+        OnPropertyChanged(nameof(EmptyFilesMessage));
+        OnPropertyChanged(nameof(HasNoFilteredFiles));
     }
 
     #region 화면 녹화 커맨드
@@ -952,6 +1158,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = "오디오 녹음 모드";
         OnPropertyChanged(nameof(IsScreenRecordingMode));
         OnPropertyChanged(nameof(IsAudioOnlyMode));
+        OnPropertyChanged(nameof(RecentFilesHeader));
+        OnPropertyChanged(nameof(FilteredRecentFiles));
+        OnPropertyChanged(nameof(EmptyFilesMessage));
+        OnPropertyChanged(nameof(HasNoFilteredFiles));
     }
 
     private bool CanSwitchMode() => RecordingState == RecordingState.Stopped && !_isStoppingScreenRecording;
@@ -972,6 +1182,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = "화면 녹화 모드";
         OnPropertyChanged(nameof(IsScreenRecordingMode));
         OnPropertyChanged(nameof(IsAudioOnlyMode));
+        OnPropertyChanged(nameof(RecentFilesHeader));
+        OnPropertyChanged(nameof(FilteredRecentFiles));
+        OnPropertyChanged(nameof(EmptyFilesMessage));
+        OnPropertyChanged(nameof(HasNoFilteredFiles));
     }
 
     [RelayCommand]
@@ -984,6 +1198,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
         CaptureRegionText = "전체 화면";
         StatusText = "전체 화면 선택됨";
+    }
+
+    [RelayCommand]
+    private void SelectMonitor()
+    {
+        var dialog = new Views.MonitorPickerDialog();
+        dialog.Owner = System.Windows.Application.Current.MainWindow;
+
+        if (dialog.ShowDialog() == true && dialog.SelectedRegion != null)
+        {
+            SelectedCaptureRegion = dialog.SelectedRegion;
+            CaptureRegionText = dialog.SelectedMonitor?.DisplayName ?? $"모니터 {dialog.SelectedRegion.MonitorIndex + 1}";
+            StatusText = $"모니터 선택됨: {CaptureRegionText}";
+        }
     }
 
     [RelayCommand]

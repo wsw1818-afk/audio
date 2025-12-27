@@ -60,13 +60,22 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        // 녹음 중이 아니고 종료 요청이 아니면 트레이로 최소화
-        if (!_isExiting && DataContext is MainViewModel vm && vm.RecordingState == Models.RecordingState.Stopped)
+        if (DataContext is not MainViewModel vm) return;
+
+        // 명시적 종료 요청이면 그냥 종료
+        if (_isExiting) return;
+
+        // 녹음/녹화 중이면 그냥 종료 (데이터 손실 방지는 별도 처리 필요)
+        if (vm.RecordingState != Models.RecordingState.Stopped) return;
+
+        // CloseAction 설정에 따라 처리
+        if (vm.CloseAction == Models.CloseAction.MinimizeToTray)
         {
             e.Cancel = true;
             Hide();
             _trayIcon.ShowBalloonTip("AudioRecorder Pro", "시스템 트레이로 최소화되었습니다.");
         }
+        // ExitImmediately인 경우 그냥 종료됨
     }
 
     private void OnKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -158,28 +167,69 @@ public partial class MainWindow : Window
         if (DataContext is MainViewModel vm && vm.SwitchToAudioModeCommand.CanExecute(null))
         {
             vm.SwitchToAudioModeCommand.Execute(null);
-            UpdateModePanel(false);
         }
     }
 
     // 화면 녹화 모드 버튼
     private void ScreenModeButton_Click(object sender, RoutedEventArgs e)
     {
+        Console.WriteLine("[MainWindow] ScreenModeButton_Click 호출됨");
         if (DataContext is MainViewModel vm && vm.SwitchToScreenModeCommand.CanExecute(null))
         {
+            Console.WriteLine("[MainWindow] SwitchToScreenModeCommand 실행");
             vm.SwitchToScreenModeCommand.Execute(null);
-            UpdateModePanel(true);
         }
     }
 
-    // 모드 패널 전환
-    private void UpdateModePanel(bool isScreenMode)
+    // 녹음 시작 버튼 Click (UI Automation 지원을 위해)
+    // InvokePattern.Invoke()는 Click 이벤트만 발생시키고 Command는 실행하지 않으므로
+    // Click 핸들러에서 Command를 직접 실행
+    private void StartRecordingButton_Click(object sender, RoutedEventArgs e)
     {
-        AudioOptionsPanel.Visibility = isScreenMode ? Visibility.Collapsed : Visibility.Visible;
-        ScreenOptionsPanel.Visibility = isScreenMode ? Visibility.Visible : Visibility.Collapsed;
+        Console.WriteLine("[MainWindow] StartRecordingButton_Click 호출됨");
+        if (DataContext is MainViewModel vm && vm.StartRecordingCommand.CanExecute(null))
+        {
+            Console.WriteLine("[MainWindow] StartRecordingCommand 실행");
+            vm.StartRecordingCommand.Execute(null);
+        }
+    }
 
-        // 레이아웃 강제 갱신
-        AudioOptionsPanel.UpdateLayout();
-        ScreenOptionsPanel.UpdateLayout();
+    // 녹화 대상 선택 콤보박스 변경
+    private void CaptureTargetCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm) return;
+        if (CaptureTargetCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item) return;
+
+        var tag = item.Tag?.ToString();
+        switch (tag)
+        {
+            case "FullScreen":
+                vm.SelectFullScreenCommand.Execute(null);
+                break;
+            case "Monitor":
+                vm.SelectMonitorCommand.Execute(null);
+                break;
+            case "Window":
+                vm.SelectWindowCommand.Execute(null);
+                break;
+            case "Region":
+                vm.SelectRegionCommand.Execute(null);
+                break;
+        }
+    }
+
+    // 옵션 패널 바깥 클릭 시 닫기
+    private void OptionsOverlay_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MainViewModel vm && vm.ToggleOptionsCommand.CanExecute(null))
+        {
+            vm.ToggleOptionsCommand.Execute(null);
+        }
+    }
+
+    // 옵션 패널 내부 클릭 시 이벤트 전파 중지
+    private void OptionsPanel_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
     }
 }

@@ -15,6 +15,7 @@ public class AppSettings
     public bool RecordSystem { get; set; } = true;
     public int MaxRecentFiles { get; set; } = 20;
     public RecordingFormat RecordingFormat { get; set; } = RecordingFormat.WAV;
+    public CloseAction CloseAction { get; set; } = CloseAction.MinimizeToTray;
 
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
