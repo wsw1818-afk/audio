@@ -235,11 +235,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public string RecentFilesHeader => IsScreenRecordingMode ? "최근 녹화" : "최근 녹음";
     public bool IsScreenRecordingAvailable => _screenRecordingEngine.IsFFmpegAvailable;
 
-    // 현재 모드에 맞는 파일만 필터링하여 표시
-    public IEnumerable<RecordingInfo> FilteredRecentFiles =>
-        IsScreenRecordingMode
-            ? RecentFiles.Where(r => r.IsVideo)
-            : RecentFiles.Where(r => !r.IsVideo);
+    // 캐싱된 필터링 결과 (LINQ 재계산 방지)
+    private List<RecordingInfo>? _cachedFilteredFiles;
+    private RecordingMode _lastFilterMode;
+    private int _lastRecentFilesCount;
+
+    // 현재 모드에 맞는 파일만 필터링하여 표시 (캐싱)
+    public IEnumerable<RecordingInfo> FilteredRecentFiles
+    {
+        get
+        {
+            // 캐시 무효화 조건: 모드 변경 또는 파일 수 변경
+            if (_cachedFilteredFiles == null ||
+                _lastFilterMode != CurrentRecordingMode ||
+                _lastRecentFilesCount != RecentFiles.Count)
+            {
+                _cachedFilteredFiles = IsScreenRecordingMode
+                    ? RecentFiles.Where(r => r.IsVideo).ToList()
+                    : RecentFiles.Where(r => !r.IsVideo).ToList();
+                _lastFilterMode = CurrentRecordingMode;
+                _lastRecentFilesCount = RecentFiles.Count;
+            }
+            return _cachedFilteredFiles;
+        }
+    }
 
     // 빈 상태 메시지
     public string EmptyFilesMessage => IsScreenRecordingMode ? "녹화 파일이 없습니다" : "녹음 파일이 없습니다";
@@ -276,10 +295,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _selectedRecordingFormat = _settings.RecordingFormat;
         _closeAction = _settings.CloseAction;
 
-        // 녹음 타이머 설정 (UI 업데이트용)
+        // 녹음 타이머 설정 (UI 업데이트용) - 100ms로 최적화
         _timer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(50)
+            Interval = TimeSpan.FromMilliseconds(100)
         };
         _timer.Tick += OnTimerTick;
 
@@ -357,7 +376,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     catch { }
                 }
 
-                // 필터링된 목록 업데이트
+                // 필터링된 목록 업데이트 (캐시 무효화)
+                _cachedFilteredFiles = null;
                 OnPropertyChanged(nameof(FilteredRecentFiles));
                 OnPropertyChanged(nameof(HasNoFilteredFiles));
             }
@@ -670,7 +690,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (RecentFiles.Count > 10)
                 RecentFiles.RemoveAt(RecentFiles.Count - 1);
 
-            // 필터링된 목록 업데이트
+            // 필터링된 목록 업데이트 (캐시 무효화)
+            _cachedFilteredFiles = null;
             OnPropertyChanged(nameof(FilteredRecentFiles));
             OnPropertyChanged(nameof(HasNoFilteredFiles));
 
@@ -892,7 +913,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 목록에서 제거
         RecentFiles.Remove(recording);
 
-        // 필터링된 목록 업데이트
+        // 필터링된 목록 업데이트 (캐시 무효화)
+        _cachedFilteredFiles = null;
         OnPropertyChanged(nameof(FilteredRecentFiles));
         OnPropertyChanged(nameof(HasNoFilteredFiles));
     }
@@ -949,8 +971,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         StatusText = $"{formatName}로 변환 중: {recording.FileName}...";
 
         _conversionService.ConversionCompleted += OnConversionCompleted;
-        await _conversionService.ConvertAsync(recording.FilePath, format);
-        _conversionService.ConversionCompleted -= OnConversionCompleted;
+        try
+        {
+            await _conversionService.ConvertAsync(recording.FilePath, format);
+        }
+        finally
+        {
+            _conversionService.ConversionCompleted -= OnConversionCompleted;
+        }
     }
 
     private void OnConversionCompleted(object? sender, AudioConversionCompletedEventArgs e)
@@ -1033,16 +1061,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // 오디오 녹음 모드
             ElapsedTime = _recordingEngine.ElapsedTime.ToString(@"hh\:mm\:ss");
 
-            // 파일 크기 업데이트
-            if (RecordingState == RecordingState.Recording && File.Exists(_recordingEngine.CurrentFilePath))
+            // 파일 크기 업데이트 (파일 I/O 없이 추적된 바이트 수 사용)
+            if (RecordingState == RecordingState.Recording)
             {
-                try
-                {
-                    var fileInfo = new FileInfo(_recordingEngine.CurrentFilePath);
-                    var sizeMb = fileInfo.Length / (1024.0 * 1024);
-                    FileInfo = $"파일: {sizeMb:F1} MB";
-                }
-                catch { }
+                var sizeMb = _recordingEngine.BytesWritten / (1024.0 * 1024);
+                FileInfo = $"파일: {sizeMb:F1} MB";
             }
         }
     }
@@ -1116,7 +1139,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (RecentFiles.Count > 10)
                     RecentFiles.RemoveAt(RecentFiles.Count - 1);
 
-                // 필터링된 목록 업데이트
+                // 필터링된 목록 업데이트 (캐시 무효화)
+                _cachedFilteredFiles = null;
                 OnPropertyChanged(nameof(FilteredRecentFiles));
                 OnPropertyChanged(nameof(HasNoFilteredFiles));
 
@@ -1141,6 +1165,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnCurrentRecordingModeChanged(RecordingMode value)
     {
+        // 모드 변경 시 캐시 무효화
+        _cachedFilteredFiles = null;
         OnPropertyChanged(nameof(IsScreenRecordingMode));
         OnPropertyChanged(nameof(IsAudioOnlyMode));
         OnPropertyChanged(nameof(RecentFilesHeader));
@@ -1156,12 +1182,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         CurrentRecordingMode = RecordingMode.AudioOnly;
         StatusText = "오디오 녹음 모드";
-        OnPropertyChanged(nameof(IsScreenRecordingMode));
-        OnPropertyChanged(nameof(IsAudioOnlyMode));
-        OnPropertyChanged(nameof(RecentFilesHeader));
-        OnPropertyChanged(nameof(FilteredRecentFiles));
-        OnPropertyChanged(nameof(EmptyFilesMessage));
-        OnPropertyChanged(nameof(HasNoFilteredFiles));
+        // OnCurrentRecordingModeChanged에서 캐시 무효화 및 PropertyChanged 처리
     }
 
     private bool CanSwitchMode() => RecordingState == RecordingState.Stopped && !_isStoppingScreenRecording;
@@ -1180,12 +1201,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         CurrentRecordingMode = RecordingMode.ScreenWithAudio;
         StatusText = "화면 녹화 모드";
-        OnPropertyChanged(nameof(IsScreenRecordingMode));
-        OnPropertyChanged(nameof(IsAudioOnlyMode));
-        OnPropertyChanged(nameof(RecentFilesHeader));
-        OnPropertyChanged(nameof(FilteredRecentFiles));
-        OnPropertyChanged(nameof(EmptyFilesMessage));
-        OnPropertyChanged(nameof(HasNoFilteredFiles));
+        // OnCurrentRecordingModeChanged에서 캐시 무효화 및 PropertyChanged 처리
     }
 
     [RelayCommand]
@@ -1265,10 +1281,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         SaveSettings();
 
+        // 타이머 정리
         _timer.Stop();
+        _timer.Tick -= OnTimerTick;
         _playbackTimer.Stop();
+        _playbackTimer.Tick -= OnPlaybackTimerTick;
+
+        // 이벤트 핸들러 정리 (메모리 누수 방지)
+        _recordingEngine.LevelUpdated -= OnLevelUpdated;
+        _recordingEngine.StateChanged -= OnStateChanged;
+        _recordingEngine.ErrorOccurred -= OnErrorOccurred;
+        _audioPlayer.PlaybackStopped -= OnPlaybackStopped;
+        _screenRecordingEngine.LevelUpdated -= OnLevelUpdated;
+        _screenRecordingEngine.StateChanged -= OnScreenRecordingStateChanged;
+        _screenRecordingEngine.ErrorOccurred -= OnErrorOccurred;
+        _screenRecordingEngine.RecordingCompleted -= OnScreenRecordingCompleted;
+
+        // 리소스 정리
         _audioPlayer.Dispose();
         _recordingEngine.Dispose();
         _screenRecordingEngine.Dispose();
+        _deviceManager.Dispose();
     }
 }

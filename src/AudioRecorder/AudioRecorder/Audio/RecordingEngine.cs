@@ -63,7 +63,11 @@ public class RecordingEngine : IDisposable
     // 단독 녹음용 재사용 버퍼
     private byte[]? _soloOutputBuffer;
 
+    // 기록된 바이트 수 추적 (UI에서 파일 I/O 없이 크기 표시용)
+    private long _bytesWritten;
+
     public RecordingState State { get; private set; } = RecordingState.Stopped;
+    public long BytesWritten => _bytesWritten;
     public TimeSpan ElapsedTime => _stopwatch.Elapsed;
     public string CurrentFilePath => _currentFilePath;
     public RecordingFormat TargetFormat { get; private set; } = RecordingFormat.WAV;
@@ -109,6 +113,7 @@ public class RecordingEngine : IDisposable
         {
             // 상태 초기화
             _isPaused = false;
+            _bytesWritten = 0;
 
             // 버퍼 클리어
             _micBuffer.Clear();
@@ -331,7 +336,7 @@ public class RecordingEngine : IDisposable
         if (_options.RecordSystemAudio)
         {
             _micBuffer.WriteFromBytes(e.Buffer, e.BytesRecorded);
-            try { _dataAvailableEvent.Set(); } catch { /* disposed */ }
+            try { _dataAvailableEvent.Set(); } catch (ObjectDisposedException) { /* 정상 종료 */ }
         }
         else
         {
@@ -360,7 +365,7 @@ public class RecordingEngine : IDisposable
         if (_options.RecordMicrophone)
         {
             _systemBuffer.WriteFromBytes(e.Buffer, e.BytesRecorded);
-            try { _dataAvailableEvent.Set(); } catch { /* disposed */ }
+            try { _dataAvailableEvent.Set(); } catch (ObjectDisposedException) { /* 정상 종료 */ }
         }
         else
         {
@@ -520,6 +525,7 @@ public class RecordingEngine : IDisposable
         lock (_writeLock)
         {
             _writer?.Write(_soloOutputBuffer, 0, outputSize);
+            _bytesWritten += outputSize;
         }
     }
 
@@ -538,6 +544,7 @@ public class RecordingEngine : IDisposable
         lock (_writeLock)
         {
             _writer?.Write(_outputBuffer, 0, outputSize);
+            _bytesWritten += outputSize;
         }
     }
 
@@ -577,6 +584,9 @@ public class RecordingEngine : IDisposable
         _micBuffer.Clear();
         _systemBuffer.Clear();
         _syncManager.Reset();
+
+        // 단독 녹음용 버퍼 정리 (메모리 해제)
+        _soloOutputBuffer = null;
     }
 
     private void OnLevelUpdated()
@@ -607,7 +617,8 @@ public class RecordingEngine : IDisposable
 
         Stop();
         _dataAvailableEvent.Dispose();
-        _deviceManager.Dispose();
+        // DeviceManager는 외부에서 주입받으므로 여기서 Dispose하지 않음
+        // MainViewModel에서 DeviceManager의 수명을 관리
     }
 }
 
