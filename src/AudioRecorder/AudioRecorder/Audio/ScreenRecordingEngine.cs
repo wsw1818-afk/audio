@@ -224,6 +224,16 @@ public class ScreenRecordingEngine : IDisposable
                 {
                     await EncodeAndMuxAsync(recordedDuration, recordedFrameCount);
                 }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[ScreenRecording] 백그라운드 인코딩 예외: {ex.Message}");
+                    OnError($"인코딩 실패: {ex.Message}");
+                    RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
+                    {
+                        Success = false,
+                        ErrorMessage = ex.Message
+                    });
+                }
                 finally
                 {
                     _isEncoding = false;
@@ -261,23 +271,33 @@ public class ScreenRecordingEngine : IDisposable
         {
             Debug.WriteLine("[ScreenRecording] 비디오 인코더 중지...");
             await _videoEncoder.StopEncodingAsync();
-            Debug.WriteLine("[ScreenRecording] 비디오 인코더 중지 완료");
 
-            Debug.WriteLine($"[ScreenRecording] 파일 확인 - video: {File.Exists(_videoPath)}, audio: {File.Exists(_audioPath)}");
+            // VideoEncoderService가 실제로 출력한 경로 사용
+            var actualVideoPath = _videoEncoder.OutputPath;
+            var videoFileToUse = File.Exists(actualVideoPath) ? actualVideoPath :
+                                 File.Exists(_videoPath) ? _videoPath : null;
 
-            if (File.Exists(_videoPath) && File.Exists(_audioPath))
+            Debug.WriteLine($"[ScreenRecording] 비디오: {videoFileToUse}, 오디오: {_audioPath}");
+
+            if (videoFileToUse != null && File.Exists(_audioPath))
             {
-                Debug.WriteLine("[ScreenRecording] 오디오/비디오 합성 시작...");
-                var muxSuccess = await _videoEncoder.MuxAudioVideoAsync(_videoPath, _audioPath, _finalOutputPath);
-                Debug.WriteLine($"[ScreenRecording] 합성 결과: {muxSuccess}");
+                // 합성 전에 임시 출력 파일 경로 생성
+                var tempMuxOutput = Path.Combine(Path.GetDirectoryName(_finalOutputPath) ?? "",
+                    $"mux_temp_{DateTime.Now:yyyyMMdd_HHmmss}.mp4");
 
-                if (muxSuccess && File.Exists(_finalOutputPath))
+                Debug.WriteLine("[ScreenRecording] 오디오/비디오 합성 시작...");
+                var muxSuccess = await _videoEncoder.MuxAudioVideoAsync(videoFileToUse, _audioPath, tempMuxOutput);
+
+                if (muxSuccess && File.Exists(tempMuxOutput))
                 {
-                    Debug.WriteLine("[ScreenRecording] 임시 파일 삭제...");
-                    try { File.Delete(_videoPath); } catch { }
+                    Debug.WriteLine("[ScreenRecording] 합성 성공, 임시 파일 정리 중...");
+                    try { File.Delete(videoFileToUse); } catch { }
                     try { File.Delete(_audioPath); } catch { }
 
-                    Debug.WriteLine("[ScreenRecording] RecordingCompleted 이벤트 발생...");
+                    // 임시 합성 파일을 최종 경로로 이동
+                    File.Move(tempMuxOutput, _finalOutputPath, true);
+                    Debug.WriteLine($"[ScreenRecording] 완료: {_finalOutputPath}");
+
                     RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                     {
                         Success = true,
@@ -288,9 +308,11 @@ public class ScreenRecordingEngine : IDisposable
                 }
                 else
                 {
-                    if (File.Exists(_videoPath))
+                    Debug.WriteLine("[ScreenRecording] 합성 실패, 비디오만 저장...");
+                    try { File.Delete(tempMuxOutput); } catch { }
+                    if (videoFileToUse != _finalOutputPath)
                     {
-                        File.Move(_videoPath, _finalOutputPath, true);
+                        File.Move(videoFileToUse, _finalOutputPath, true);
                     }
 
                     RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
@@ -303,9 +325,13 @@ public class ScreenRecordingEngine : IDisposable
                     });
                 }
             }
-            else if (File.Exists(_videoPath))
+            else if (videoFileToUse != null)
             {
-                File.Move(_videoPath, _finalOutputPath, true);
+                Debug.WriteLine("[ScreenRecording] 오디오 없음, 비디오만 저장...");
+                if (videoFileToUse != _finalOutputPath)
+                {
+                    File.Move(videoFileToUse, _finalOutputPath, true);
+                }
 
                 RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                 {
@@ -317,6 +343,7 @@ public class ScreenRecordingEngine : IDisposable
             }
             else
             {
+                Debug.WriteLine("[ScreenRecording] 비디오 파일 없음!");
                 RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                 {
                     Success = false,

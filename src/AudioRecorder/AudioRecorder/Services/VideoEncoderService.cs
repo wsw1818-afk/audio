@@ -271,8 +271,27 @@ public class VideoEncoderService : IDisposable
     /// </summary>
     public async Task<bool> MuxAudioVideoAsync(string videoPath, string audioPath, string outputPath)
     {
-        if (!IsFFmpegAvailable || !File.Exists(videoPath) || !File.Exists(audioPath))
+        Debug.WriteLine($"[MuxAudioVideo] 시작 - video: {videoPath}, audio: {audioPath}, output: {outputPath}");
+        Debug.WriteLine($"[MuxAudioVideo] FFmpegPath: {FFmpegPath}, IsAvailable: {IsFFmpegAvailable}");
+        Debug.WriteLine($"[MuxAudioVideo] video exists: {File.Exists(videoPath)}, audio exists: {File.Exists(audioPath)}");
+
+        if (!IsFFmpegAvailable)
+        {
+            Debug.WriteLine("[MuxAudioVideo] FFmpeg 사용 불가");
             return false;
+        }
+
+        if (!File.Exists(videoPath))
+        {
+            Debug.WriteLine($"[MuxAudioVideo] 비디오 파일 없음: {videoPath}");
+            return false;
+        }
+
+        if (!File.Exists(audioPath))
+        {
+            Debug.WriteLine($"[MuxAudioVideo] 오디오 파일 없음: {audioPath}");
+            return false;
+        }
 
         try
         {
@@ -282,25 +301,62 @@ public class VideoEncoderService : IDisposable
                            $"-shortest " +
                            $"\"{outputPath}\"";
 
+            Debug.WriteLine($"[MuxAudioVideo] FFmpeg 인자: {arguments}");
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = FFmpegPath,
                 Arguments = arguments,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                RedirectStandardOutput = true
             };
 
             using var process = Process.Start(startInfo);
-            if (process == null) return false;
+            if (process == null)
+            {
+                Debug.WriteLine("[MuxAudioVideo] 프로세스 시작 실패");
+                return false;
+            }
 
-            // 30초 타임아웃으로 합성 완료 대기
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
-            return process.ExitCode == 0;
+            Debug.WriteLine($"[MuxAudioVideo] FFmpeg 프로세스 시작됨: PID={process.Id}");
+
+            // 에러 출력 캡처
+            var errorOutput = new System.Text.StringBuilder();
+            process.ErrorDataReceived += (s, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    errorOutput.AppendLine(e.Data);
+                    Debug.WriteLine($"[MuxAudioVideo/FFmpeg] {e.Data}");
+                }
+            };
+            process.BeginErrorReadLine();
+
+            // 60초 타임아웃으로 합성 완료 대기 (긴 영상 지원)
+            var completed = await Task.Run(() => process.WaitForExit(60000));
+            if (!completed)
+            {
+                Debug.WriteLine("[MuxAudioVideo] 타임아웃 - 프로세스 강제 종료");
+                try { process.Kill(); } catch { }
+                return false;
+            }
+
+            Debug.WriteLine($"[MuxAudioVideo] FFmpeg 종료 코드: {process.ExitCode}");
+
+            if (process.ExitCode != 0)
+            {
+                Debug.WriteLine($"[MuxAudioVideo] FFmpeg 에러 출력:\n{errorOutput}");
+            }
+
+            var success = process.ExitCode == 0 && File.Exists(outputPath);
+            Debug.WriteLine($"[MuxAudioVideo] 최종 결과: {success}, 출력 파일 존재: {File.Exists(outputPath)}");
+            return success;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"오디오/비디오 합성 실패: {ex.Message}");
+            Debug.WriteLine($"[MuxAudioVideo] 예외 발생: {ex.Message}\n{ex.StackTrace}");
             return false;
         }
     }
