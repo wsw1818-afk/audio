@@ -95,16 +95,20 @@ public class VideoEncoderService : IDisposable
             throw new InvalidOperationException("이미 인코딩 중입니다.");
 
         _outputPath = outputPath;
+        _writtenFrameCount = 0;  // 프레임 카운터 초기화
         _isEncoding = true;
+
+        Debug.WriteLine($"[VideoEncoder] StartEncoding - outputPath: {outputPath}, size: {width}x{height}, fps: {frameRate}");
 
         // 임시 오디오 파일 경로 (나중에 합성용)
         _tempAudioPath = Path.Combine(Path.GetDirectoryName(outputPath) ?? "",
             $"temp_audio_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
-        // 소프트웨어 인코딩 (libx264) 사용 - 호환성 최우선
+        // 소프트웨어 인코딩 (libx264) 사용 - 표준 H.264
+        // Windows Media Player, VLC 등 대부분의 플레이어 지원
+        // 곰플레이어 사용 시 K-Lite Codec Pack 설치 권장
         var arguments = $"-y -f rawvideo -pix_fmt bgra -s {width}x{height} -r {frameRate} -i - " +
-                        $"-c:v libx264 -preset fast -b:v {bitrate} " +
-                        $"-pix_fmt yuv420p " +
+                        $"-c:v libx264 -preset fast -crf 23 -g {frameRate} -pix_fmt yuv420p " +
                         $"-movflags +faststart " +
                         $"\"{outputPath}\"";
 
@@ -135,7 +139,7 @@ public class VideoEncoderService : IDisposable
                 CreateNoWindow = true,
                 RedirectStandardInput = true,
                 RedirectStandardError = true,
-                RedirectStandardOutput = true
+                RedirectStandardOutput = false  // stdout은 사용하지 않으므로 리다이렉트 안함 (데드락 방지)
             };
 
             _ffmpegProcess = Process.Start(startInfo);
@@ -199,7 +203,10 @@ public class VideoEncoderService : IDisposable
     {
         if (!_isEncoding || _pipeWriter == null)
         {
-            Debug.WriteLine($"[VideoEncoder] WriteFrame 스킵 - isEncoding: {_isEncoding}, pipeWriter: {_pipeWriter != null}");
+            if (_writtenFrameCount == 0 || _writtenFrameCount % 30 == 0)
+            {
+                Debug.WriteLine($"[VideoEncoder] WriteFrame 스킵 - isEncoding: {_isEncoding}, pipeWriter: {_pipeWriter != null}, frameCount: {_writtenFrameCount}");
+            }
             return;
         }
 
@@ -273,7 +280,6 @@ public class VideoEncoderService : IDisposable
     {
         Debug.WriteLine($"[MuxAudioVideo] 시작 - video: {videoPath}, audio: {audioPath}, output: {outputPath}");
         Debug.WriteLine($"[MuxAudioVideo] FFmpegPath: {FFmpegPath}, IsAvailable: {IsFFmpegAvailable}");
-        Debug.WriteLine($"[MuxAudioVideo] video exists: {File.Exists(videoPath)}, audio exists: {File.Exists(audioPath)}");
 
         if (!IsFFmpegAvailable)
         {
@@ -281,6 +287,7 @@ public class VideoEncoderService : IDisposable
             return false;
         }
 
+        // 파일 존재 확인 및 접근 가능 여부 체크
         if (!File.Exists(videoPath))
         {
             Debug.WriteLine($"[MuxAudioVideo] 비디오 파일 없음: {videoPath}");
@@ -290,6 +297,17 @@ public class VideoEncoderService : IDisposable
         if (!File.Exists(audioPath))
         {
             Debug.WriteLine($"[MuxAudioVideo] 오디오 파일 없음: {audioPath}");
+            return false;
+        }
+
+        // 파일 크기 확인
+        var videoInfo = new FileInfo(videoPath);
+        var audioInfo = new FileInfo(audioPath);
+        Debug.WriteLine($"[MuxAudioVideo] video size: {videoInfo.Length}, audio size: {audioInfo.Length}");
+
+        if (videoInfo.Length == 0 || audioInfo.Length == 0)
+        {
+            Debug.WriteLine("[MuxAudioVideo] 파일 크기가 0입니다");
             return false;
         }
 
@@ -310,7 +328,7 @@ public class VideoEncoderService : IDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardError = true,
-                RedirectStandardOutput = true
+                RedirectStandardOutput = false  // stdout은 사용하지 않으므로 리다이렉트 안함 (데드락 방지)
             };
 
             using var process = Process.Start(startInfo);
@@ -322,26 +340,11 @@ public class VideoEncoderService : IDisposable
 
             Debug.WriteLine($"[MuxAudioVideo] FFmpeg 프로세스 시작됨: PID={process.Id}");
 
-            // 에러 출력 캡처
-            var errorOutput = new System.Text.StringBuilder();
-            process.ErrorDataReceived += (s, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    errorOutput.AppendLine(e.Data);
-                    Debug.WriteLine($"[MuxAudioVideo/FFmpeg] {e.Data}");
-                }
-            };
-            process.BeginErrorReadLine();
+            // 에러 출력을 동기적으로 읽기 (WaitForExit 전에 완료되도록)
+            var errorOutput = await process.StandardError.ReadToEndAsync();
 
-            // 60초 타임아웃으로 합성 완료 대기 (긴 영상 지원)
-            var completed = await Task.Run(() => process.WaitForExit(60000));
-            if (!completed)
-            {
-                Debug.WriteLine("[MuxAudioVideo] 타임아웃 - 프로세스 강제 종료");
-                try { process.Kill(); } catch { }
-                return false;
-            }
+            // 프로세스 종료 대기 (ReadToEndAsync가 완료되면 프로세스는 이미 종료 상태)
+            await process.WaitForExitAsync();
 
             Debug.WriteLine($"[MuxAudioVideo] FFmpeg 종료 코드: {process.ExitCode}");
 
@@ -351,7 +354,16 @@ public class VideoEncoderService : IDisposable
             }
 
             var success = process.ExitCode == 0 && File.Exists(outputPath);
-            Debug.WriteLine($"[MuxAudioVideo] 최종 결과: {success}, 출력 파일 존재: {File.Exists(outputPath)}");
+            if (success)
+            {
+                var outputInfo = new FileInfo(outputPath);
+                Debug.WriteLine($"[MuxAudioVideo] 성공! 출력 파일 크기: {outputInfo.Length}");
+            }
+            else
+            {
+                Debug.WriteLine($"[MuxAudioVideo] 실패 - ExitCode: {process.ExitCode}, FileExists: {File.Exists(outputPath)}");
+            }
+
             return success;
         }
         catch (Exception ex)

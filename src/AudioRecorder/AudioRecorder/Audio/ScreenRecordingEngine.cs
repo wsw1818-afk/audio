@@ -130,17 +130,17 @@ public class ScreenRecordingEngine : IDisposable
 
         try
         {
-            _isRecording = true;
             _isPaused = false;
 
             // 버퍼 초기화
             _micBuffer.Clear();
             _systemBuffer.Clear();
+            _receivedFrameCount = 0;
 
-            // 화면 캡처 시작
+            // 화면 캡처 먼저 초기화 (크기 정보 필요)
             _screenCapture.Start(options.Region, options.FrameRate, options.ShowMouseCursor);
 
-            // 비디오 인코더 시작
+            // 비디오 인코더 시작 (캡처 시작 후 크기 정보로)
             _videoEncoder.StartEncoding(
                 _videoPath,
                 _screenCapture.FrameWidth,
@@ -149,6 +149,9 @@ public class ScreenRecordingEngine : IDisposable
                 options.VideoFormat,
                 options.VideoBitrate,
                 options.UseHardwareEncoding);
+
+            // 인코더가 준비된 후 녹화 플래그 활성화
+            _isRecording = true;
 
             // 오디오 녹음 시작
             if (options.IncludeMicrophone || options.IncludeSystemAudio)
@@ -217,16 +220,25 @@ public class ScreenRecordingEngine : IDisposable
             OnStateChanged();
 
             // 인코딩은 백그라운드에서 진행
+            Debug.WriteLine($"[ScreenRecording] 백그라운드 태스크 시작 준비 - duration: {recordedDuration}, frames: {recordedFrameCount}");
+            Debug.WriteLine($"[ScreenRecording] _videoPath: {_videoPath}, _audioPath: {_audioPath}, _finalOutputPath: {_finalOutputPath}");
+
+            // 로컬 변수로 복사 (클로저 문제 방지)
+            var videoPath = _videoPath;
+            var audioPath = _audioPath;
+            var finalOutputPath = _finalOutputPath;
+
             _isEncoding = true;
             _ = Task.Run(async () =>
             {
+                Debug.WriteLine("[ScreenRecording] 백그라운드 태스크 실행 시작!");
                 try
                 {
                     await EncodeAndMuxAsync(recordedDuration, recordedFrameCount);
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[ScreenRecording] 백그라운드 인코딩 예외: {ex.Message}");
+                    Debug.WriteLine($"[ScreenRecording] 백그라운드 인코딩 예외: {ex.Message}\n{ex.StackTrace}");
                     OnError($"인코딩 실패: {ex.Message}");
                     RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                     {
@@ -237,6 +249,7 @@ public class ScreenRecordingEngine : IDisposable
                 finally
                 {
                     _isEncoding = false;
+                    Debug.WriteLine("[ScreenRecording] 백그라운드 태스크 종료");
                 }
             });
         }
@@ -265,19 +278,38 @@ public class ScreenRecordingEngine : IDisposable
     /// </summary>
     private async Task EncodeAndMuxAsync(TimeSpan recordedDuration, long recordedFrameCount)
     {
-        Debug.WriteLine("[ScreenRecording] 백그라운드 인코딩 시작...");
+        // 디버그 로그 파일 - 명시적 경로 사용
+        var logDir = Path.GetDirectoryName(_finalOutputPath);
+        if (string.IsNullOrEmpty(logDir))
+        {
+            logDir = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
+        }
+        var logPath = Path.Combine(logDir, "debug_mux.log");
+
+        void Log(string msg)
+        {
+            Debug.WriteLine($"[ScreenRecording] {msg}");
+            try { File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); } catch (Exception ex) { Debug.WriteLine($"Log write error: {ex.Message}"); }
+        }
+
+        Log($"=== 백그라운드 인코딩 시작 === (finalOutputPath: {_finalOutputPath})");
 
         try
         {
-            Debug.WriteLine("[ScreenRecording] 비디오 인코더 중지...");
+            Log("비디오 인코더 중지 시작...");
             await _videoEncoder.StopEncodingAsync();
+            Log("비디오 인코더 중지 완료");
 
             // VideoEncoderService가 실제로 출력한 경로 사용
             var actualVideoPath = _videoEncoder.OutputPath;
+            Log($"actualVideoPath: {actualVideoPath}, exists: {File.Exists(actualVideoPath)}");
+            Log($"_videoPath: {_videoPath}, exists: {File.Exists(_videoPath)}");
+            Log($"_audioPath: {_audioPath}, exists: {File.Exists(_audioPath)}");
+
             var videoFileToUse = File.Exists(actualVideoPath) ? actualVideoPath :
                                  File.Exists(_videoPath) ? _videoPath : null;
 
-            Debug.WriteLine($"[ScreenRecording] 비디오: {videoFileToUse}, 오디오: {_audioPath}");
+            Log($"videoFileToUse: {videoFileToUse ?? "null"}");
 
             if (videoFileToUse != null && File.Exists(_audioPath))
             {
@@ -285,18 +317,20 @@ public class ScreenRecordingEngine : IDisposable
                 var tempMuxOutput = Path.Combine(Path.GetDirectoryName(_finalOutputPath) ?? "",
                     $"mux_temp_{DateTime.Now:yyyyMMdd_HHmmss}.mp4");
 
-                Debug.WriteLine("[ScreenRecording] 오디오/비디오 합성 시작...");
+                Log($"tempMuxOutput: {tempMuxOutput}");
+                Log("오디오/비디오 합성 시작...");
                 var muxSuccess = await _videoEncoder.MuxAudioVideoAsync(videoFileToUse, _audioPath, tempMuxOutput);
+                Log($"합성 결과: {muxSuccess}, tempMuxOutput exists: {File.Exists(tempMuxOutput)}");
 
                 if (muxSuccess && File.Exists(tempMuxOutput))
                 {
-                    Debug.WriteLine("[ScreenRecording] 합성 성공, 임시 파일 정리 중...");
+                    Log("합성 성공! 임시 파일 정리 중...");
                     try { File.Delete(videoFileToUse); } catch { }
                     try { File.Delete(_audioPath); } catch { }
 
                     // 임시 합성 파일을 최종 경로로 이동
                     File.Move(tempMuxOutput, _finalOutputPath, true);
-                    Debug.WriteLine($"[ScreenRecording] 완료: {_finalOutputPath}");
+                    Log($"완료: {_finalOutputPath}");
 
                     RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                     {
@@ -308,7 +342,7 @@ public class ScreenRecordingEngine : IDisposable
                 }
                 else
                 {
-                    Debug.WriteLine("[ScreenRecording] 합성 실패, 비디오만 저장...");
+                    Log("합성 실패! 비디오만 저장...");
                     try { File.Delete(tempMuxOutput); } catch { }
                     if (videoFileToUse != _finalOutputPath)
                     {
@@ -327,7 +361,7 @@ public class ScreenRecordingEngine : IDisposable
             }
             else if (videoFileToUse != null)
             {
-                Debug.WriteLine("[ScreenRecording] 오디오 없음, 비디오만 저장...");
+                Log("오디오 파일 없음, 비디오만 저장...");
                 if (videoFileToUse != _finalOutputPath)
                 {
                     File.Move(videoFileToUse, _finalOutputPath, true);
@@ -343,7 +377,7 @@ public class ScreenRecordingEngine : IDisposable
             }
             else
             {
-                Debug.WriteLine("[ScreenRecording] 비디오 파일 없음!");
+                Log("비디오 파일 없음!");
                 RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                 {
                     Success = false,
@@ -353,7 +387,7 @@ public class ScreenRecordingEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[ScreenRecording] 인코딩 예외: {ex.Message}");
+            Log($"예외 발생: {ex.Message}\n{ex.StackTrace}");
             OnError($"인코딩 실패: {ex.Message}");
             RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
             {
@@ -362,7 +396,7 @@ public class ScreenRecordingEngine : IDisposable
             });
         }
 
-        Debug.WriteLine("[ScreenRecording] 백그라운드 인코딩 완료");
+        Log("=== 백그라운드 인코딩 완료 ===");
     }
 
     /// <summary>
