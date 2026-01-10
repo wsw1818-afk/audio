@@ -5,6 +5,7 @@ namespace AudioRecorder.Audio;
 /// <summary>
 /// 고성능 스레드 세이프 링 버퍼 - 오디오 데이터 버퍼링용
 /// Array.Copy/Span.CopyTo를 사용한 블록 전송으로 성능 최적화
+/// 읽기 전용 Count는 volatile로 lock-free 접근
 /// </summary>
 public class RingBuffer
 {
@@ -12,11 +13,19 @@ public class RingBuffer
     private readonly object _lock = new();
     private int _writePosition;
     private int _readPosition;
-    private int _count;
+    private volatile int _count;
 
     public int Capacity { get; }
-    public int Count { get { lock (_lock) return _count; } }
-    public int FreeSpace { get { lock (_lock) return Capacity - _count; } }
+
+    /// <summary>
+    /// 현재 버퍼에 있는 샘플 수 (Lock-free 읽기)
+    /// </summary>
+    public int Count => _count;
+
+    /// <summary>
+    /// 남은 공간 (Lock-free 읽기)
+    /// </summary>
+    public int FreeSpace => Capacity - _count;
 
     public RingBuffer(int capacity)
     {

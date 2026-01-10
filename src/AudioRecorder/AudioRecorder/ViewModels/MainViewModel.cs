@@ -96,7 +96,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         RecordingFormat.WAV,
         RecordingFormat.FLAC,
-        RecordingFormat.MP3_320
+        RecordingFormat.MP3_320,
+        RecordingFormat.MP3_128
     };
 
     // 화면 녹화 모드
@@ -112,14 +113,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private string _selectedVideoQuality = "고화질";
 
-    // 품질 옵션 (FPS + CRF 통합) - 2개만
+    // 품질 옵션 (FPS + CRF 통합) - 3개
+    // 무손실: 60fps, CRF 10 (거의 무손실, 파일 큼)
     // 최고 화질: 60fps, CRF 15 (부드럽고 선명)
     // 고화질: 30fps, CRF 20 (일반적인 고화질)
-    public IReadOnlyList<string> VideoQualityOptions { get; } = new[] { "고화질", "최고 화질" };
+    public IReadOnlyList<string> VideoQualityOptions { get; } = new[] { "고화질", "최고 화질", "무손실" };
 
     // 품질을 FPS로 변환
     public int GetFpsFromQuality() => SelectedVideoQuality switch
     {
+        "무손실" => 60,
         "최고 화질" => 60,
         "고화질" => 30,
         _ => 30
@@ -128,9 +131,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     // 품질을 CRF 값으로 변환
     public int GetCrfFromQuality() => SelectedVideoQuality switch
     {
+        "무손실" => 10,
         "최고 화질" => 15,
         "고화질" => 20,
         _ => 20
+    };
+
+    // 품질에 따른 프리셋
+    public string GetPresetFromQuality() => SelectedVideoQuality switch
+    {
+        "무손실" => "medium",
+        "최고 화질" => "medium",
+        "고화질" => "fast",
+        _ => "fast"
     };
 
     [ObservableProperty]
@@ -526,6 +539,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             FrameRate = GetFpsFromQuality(),
             VideoFormat = SelectedVideoFormat,
             VideoCrf = GetCrfFromQuality(),
+            EncoderPreset = GetPresetFromQuality(),
             OutputDirectory = OutputDirectory,
             IncludeMicrophone = RecordMicrophone,
             IncludeSystemAudio = RecordSystemAudio,
@@ -625,7 +639,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task StopAudioRecordingAsync()
+    private Task StopAudioRecordingAsync()
     {
         var wavFilePath = _recordingEngine.CurrentFilePath;
         var targetFormat = _recordingEngine.TargetFormat;
@@ -633,80 +647,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _recordingEngine.Stop();
 
-        if (!File.Exists(wavFilePath))
-        {
-            StatusText = "녹음 파일을 찾을 수 없습니다.";
-            return;
-        }
-
-        string finalFilePath = wavFilePath;
-
-        // WAV가 아닌 포맷이면 변환 수행
-        if (targetFormat != RecordingFormat.WAV)
-        {
-            var formatName = targetFormat.GetDisplayName();
-            StatusText = $"{formatName}로 변환 중...";
-
-            var audioFormat = targetFormat == RecordingFormat.FLAC
-                ? AudioFormat.FLAC
-                : AudioFormat.MP3_320;
-
-            var targetExtension = targetFormat.GetExtension();
-            finalFilePath = Path.ChangeExtension(wavFilePath, targetExtension);
-
-            var success = await _conversionService.ConvertAsync(wavFilePath, audioFormat, finalFilePath);
-
-            if (success && File.Exists(finalFilePath))
-            {
-                // 변환 성공 시 원본 WAV 삭제
-                try { File.Delete(wavFilePath); } catch { }
-                StatusText = $"{formatName} 변환 완료";
-            }
-            else
-            {
-                // 변환 실패 시 WAV 유지
-                finalFilePath = wavFilePath;
-                StatusText = "변환 실패, WAV로 저장됨";
-            }
-        }
-        else
-        {
-            StatusText = "녹음 완료";
-        }
-
-        // 최근 파일 목록에 추가
-        if (File.Exists(finalFilePath))
-        {
-            var fileInfo = new FileInfo(finalFilePath);
-            var recording = new RecordingInfo
-            {
-                FilePath = finalFilePath,
-                RecordedAt = DateTime.Now,
-                Duration = duration,
-                FileSize = fileInfo.Length
-            };
-
-            RecentFiles.Insert(0, recording);
-            if (RecentFiles.Count > 10)
-                RecentFiles.RemoveAt(RecentFiles.Count - 1);
-
-            // 필터링된 목록 업데이트 (캐시 무효화)
-            _cachedFilteredFiles = null;
-            OnPropertyChanged(nameof(FilteredRecentFiles));
-            OnPropertyChanged(nameof(HasNoFilteredFiles));
-
-            var sizeMb = recording.FileSize / (1024.0 * 1024);
-            if (sizeMb >= 1)
-                FileInfo = $"저장됨: {recording.FileName} ({sizeMb:F1} MB)";
-            else
-                FileInfo = $"저장됨: {recording.FileName} ({recording.FileSize / 1024.0:F1} KB)";
-        }
-
-        // 녹음 완료 후 상태 및 모드 전환 버튼 활성화
-        _isStoppingScreenRecording = false; // 플래그 초기화
+        // 즉시 버튼 활성화 (UI 응답성 개선)
+        _isStoppingScreenRecording = false;
         RecordingState = RecordingState.Stopped;
-
-        // 모든 커맨드 상태 갱신
         StartRecordingCommand.NotifyCanExecuteChanged();
         StopRecordingCommand.NotifyCanExecuteChanged();
         PauseRecordingCommand.NotifyCanExecuteChanged();
@@ -715,9 +658,115 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SwitchToScreenModeCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(CanSwitchModeBinding));
 
-        System.Diagnostics.Debug.WriteLine($"[ViewModel] 오디오 녹음 완료 - CanSwitchModeBinding: {CanSwitchModeBinding}");
+        if (!File.Exists(wavFilePath))
+        {
+            StatusText = "녹음 파일을 찾을 수 없습니다.";
+            return Task.CompletedTask;
+        }
 
-        // 최근 파일 목록 저장
+        // WAV 포맷이면 즉시 완료
+        if (targetFormat == RecordingFormat.WAV)
+        {
+            AddToRecentFiles(wavFilePath, duration);
+            StatusText = "녹음 완료";
+            return Task.CompletedTask;
+        }
+
+        // WAV가 아닌 포맷은 백그라운드에서 변환
+        var formatName = targetFormat.GetDisplayName();
+        StatusText = $"{formatName}로 변환 중... (백그라운드)";
+
+        // 로컬 변수로 복사 (클로저 문제 방지)
+        var localWavPath = wavFilePath;
+        var localTargetFormat = targetFormat;
+        var localDuration = duration;
+
+        // 클로저에서 사용할 formatName도 캡처
+        var localFormatName = formatName;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var audioFormat = localTargetFormat switch
+                {
+                    RecordingFormat.FLAC => AudioFormat.FLAC,
+                    RecordingFormat.MP3_128 => AudioFormat.MP3_128,
+                    _ => AudioFormat.MP3_320
+                };
+
+                var targetExtension = localTargetFormat.GetExtension();
+                var finalFilePath = Path.ChangeExtension(localWavPath, targetExtension);
+
+                System.Diagnostics.Debug.WriteLine($"[AudioConvert] 변환 시작: {localWavPath} -> {finalFilePath} (Format: {audioFormat})");
+
+                var success = await _conversionService.ConvertAsync(localWavPath, audioFormat, finalFilePath);
+
+                System.Diagnostics.Debug.WriteLine($"[AudioConvert] 변환 결과: success={success}, fileExists={File.Exists(finalFilePath)}");
+
+                // UI 스레드에서 결과 처리
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    if (success && File.Exists(finalFilePath))
+                    {
+                        // 변환 성공 시 원본 WAV 삭제
+                        try { File.Delete(localWavPath); } catch { }
+                        AddToRecentFiles(finalFilePath, localDuration);
+                        StatusText = $"{localFormatName} 변환 완료";
+                    }
+                    else
+                    {
+                        // 변환 실패 시 WAV 유지
+                        AddToRecentFiles(localWavPath, localDuration);
+                        StatusText = "변환 실패, WAV로 저장됨";
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[AudioConvert] 예외 발생: {ex.Message}");
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    AddToRecentFiles(localWavPath, localDuration);
+                    StatusText = $"변환 오류: {ex.Message}";
+                });
+            }
+        });
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// 최근 파일 목록에 추가 (UI 스레드에서 호출)
+    /// </summary>
+    private void AddToRecentFiles(string filePath, TimeSpan duration)
+    {
+        if (!File.Exists(filePath)) return;
+
+        var fileInfo = new FileInfo(filePath);
+        var recording = new RecordingInfo
+        {
+            FilePath = filePath,
+            RecordedAt = DateTime.Now,
+            Duration = duration,
+            FileSize = fileInfo.Length
+        };
+
+        RecentFiles.Insert(0, recording);
+        if (RecentFiles.Count > 10)
+            RecentFiles.RemoveAt(RecentFiles.Count - 1);
+
+        // 필터링된 목록 업데이트 (캐시 무효화)
+        _cachedFilteredFiles = null;
+        OnPropertyChanged(nameof(FilteredRecentFiles));
+        OnPropertyChanged(nameof(HasNoFilteredFiles));
+
+        var sizeMb = recording.FileSize / (1024.0 * 1024);
+        if (sizeMb >= 1)
+            FileInfo = $"저장됨: {recording.FileName} ({sizeMb:F1} MB)";
+        else
+            FileInfo = $"저장됨: {recording.FileName} ({recording.FileSize / 1024.0:F1} KB)";
+
         SaveRecentFiles();
     }
 
@@ -1070,16 +1119,49 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // 레벨 업데이트 캐싱 (문자열 생성 최소화)
+    private string _lastMicLevelDbText = "-∞ dB";
+    private string _lastSystemLevelDbText = "-∞ dB";
+    private int _lastMicLevelDbRounded = -100;
+    private int _lastSystemLevelDbRounded = -100;
+
     private void OnLevelUpdated(object? sender, LevelEventArgs e)
     {
-        // UI 스레드에서 업데이트
-        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        // 문자열 생성은 메인 스레드 외부에서 미리 처리
+        int micDbRounded = e.MicLevelDb <= -60 ? -100 : (int)e.MicLevelDb;
+        int sysDbRounded = e.SystemLevelDb <= -60 ? -100 : (int)e.SystemLevelDb;
+
+        // dB 값이 변경된 경우에만 문자열 생성
+        string micDbText = _lastMicLevelDbText;
+        string sysDbText = _lastSystemLevelDbText;
+
+        if (micDbRounded != _lastMicLevelDbRounded)
         {
-            MicLevel = e.MicLevel;
-            SystemLevel = e.SystemLevel;
-            MicLevelDb = e.MicLevelDb <= -60 ? "-∞ dB" : $"{e.MicLevelDb:F0} dB";
-            SystemLevelDb = e.SystemLevelDb <= -60 ? "-∞ dB" : $"{e.SystemLevelDb:F0} dB";
-        });
+            micDbText = micDbRounded == -100 ? "-∞ dB" : $"{micDbRounded} dB";
+            _lastMicLevelDbRounded = micDbRounded;
+            _lastMicLevelDbText = micDbText;
+        }
+
+        if (sysDbRounded != _lastSystemLevelDbRounded)
+        {
+            sysDbText = sysDbRounded == -100 ? "-∞ dB" : $"{sysDbRounded} dB";
+            _lastSystemLevelDbRounded = sysDbRounded;
+            _lastSystemLevelDbText = sysDbText;
+        }
+
+        // 캡처된 값으로 UI 업데이트 (Background 우선순위)
+        var micLevel = e.MicLevel;
+        var sysLevel = e.SystemLevel;
+
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.Background,
+            () =>
+            {
+                MicLevel = micLevel;
+                SystemLevel = sysLevel;
+                MicLevelDb = micDbText;
+                SystemLevelDb = sysDbText;
+            });
     }
 
     private void OnStateChanged(object? sender, RecordingStateChangedEventArgs e)

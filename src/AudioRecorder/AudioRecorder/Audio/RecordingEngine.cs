@@ -35,8 +35,8 @@ public class RecordingEngine : IDisposable
 
     // 내부 포맷 (32-bit float, 48kHz, Stereo)
     private readonly WaveFormat _internalFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
-    // 출력 포맷 (16-bit PCM, 48kHz, Stereo)
-    private readonly WaveFormat _outputFormat = new(48000, 16, 2);
+    // 출력 포맷 (24-bit PCM, 48kHz, Stereo) - 스튜디오급 품질
+    private readonly WaveFormat _outputFormat = new(48000, 24, 2);
 
     private readonly object _writeLock = new();
     private Thread? _mixingThread;
@@ -45,12 +45,12 @@ public class RecordingEngine : IDisposable
     private System.Threading.Timer? _flushTimer;
     private readonly AutoResetEvent _dataAvailableEvent = new(false);
 
-    // 싱크 체크 간격
+    // 싱크 체크 간격 (Environment.TickCount64 사용 - DateTime.Now보다 빠름)
     private const int SYNC_CHECK_INTERVAL_MS = 5000;
-    private DateTime _lastSyncCheck = DateTime.MinValue;
+    private long _lastSyncCheckTick;
 
-    // 레벨 업데이트 쓰로틀링
-    private DateTime _lastLevelUpdate = DateTime.MinValue;
+    // 레벨 업데이트 쓰로틀링 (Environment.TickCount64 사용)
+    private long _lastLevelUpdateTick;
     private const int LEVEL_UPDATE_INTERVAL_MS = 50;
 
     // 재사용 버퍼 (GC 압력 최소화)
@@ -58,7 +58,7 @@ public class RecordingEngine : IDisposable
     private readonly float[] _mixMicData = new float[CHUNK_SIZE];
     private readonly float[] _mixSysData = new float[CHUNK_SIZE];
     private readonly float[] _mixBuffer = new float[CHUNK_SIZE];
-    private readonly byte[] _outputBuffer = new byte[CHUNK_SIZE * 2];
+    private readonly byte[] _outputBuffer = new byte[CHUNK_SIZE * 3]; // 24-bit = 3 bytes per sample
 
     // 단독 녹음용 재사용 버퍼
     private byte[]? _soloOutputBuffer;
@@ -376,10 +376,10 @@ public class RecordingEngine : IDisposable
 
     private void ThrottledLevelUpdate()
     {
-        var now = DateTime.Now;
-        if ((now - _lastLevelUpdate).TotalMilliseconds >= LEVEL_UPDATE_INTERVAL_MS)
+        long now = Environment.TickCount64;
+        if (now - _lastLevelUpdateTick >= LEVEL_UPDATE_INTERVAL_MS)
         {
-            _lastLevelUpdate = now;
+            _lastLevelUpdateTick = now;
             OnLevelUpdated();
         }
     }
@@ -406,10 +406,11 @@ public class RecordingEngine : IDisposable
                 if (minAvailable >= CHUNK_SIZE)
                 {
                     // 싱크 체크 (5초마다)
-                    if ((DateTime.Now - _lastSyncCheck).TotalMilliseconds > SYNC_CHECK_INTERVAL_MS)
+                    long now = Environment.TickCount64;
+                    if (now - _lastSyncCheckTick > SYNC_CHECK_INTERVAL_MS)
                     {
                         PerformSyncCorrection();
-                        _lastSyncCheck = DateTime.Now;
+                        _lastSyncCheckTick = now;
 
                         // 진단 정보 이벤트 발생
                         var diagnostics = _syncManager.GetDiagnostics();
@@ -504,7 +505,7 @@ public class RecordingEngine : IDisposable
         if (_writer == null) return;
 
         int sampleCount = bytesRecorded / 4;
-        int outputSize = sampleCount * 2;
+        int outputSize = sampleCount * 3; // 24-bit = 3 bytes per sample
 
         // 필요시 버퍼 재할당 (일반적으로 한 번만 발생)
         if (_soloOutputBuffer == null || _soloOutputBuffer.Length < outputSize)
@@ -514,12 +515,17 @@ public class RecordingEngine : IDisposable
 
         // Span 기반 변환 (제로카피)
         var floatSpan = MemoryMarshal.Cast<byte, float>(buffer.AsSpan(0, bytesRecorded));
-        var shortSpan = MemoryMarshal.Cast<byte, short>(_soloOutputBuffer.AsSpan(0, outputSize));
+        var outputSpan = _soloOutputBuffer.AsSpan(0, outputSize);
 
+        // 24-bit 변환 (float -> 24-bit PCM) - Span으로 최적화
         for (int i = 0; i < sampleCount; i++)
         {
             float sample = Math.Clamp(floatSpan[i] * volume, -1.0f, 1.0f);
-            shortSpan[i] = (short)(sample * 32767);
+            int sample24 = (int)(sample * 8388607); // 2^23 - 1
+            int byteIndex = i * 3;
+            outputSpan[byteIndex] = (byte)sample24;
+            outputSpan[byteIndex + 1] = (byte)(sample24 >> 8);
+            outputSpan[byteIndex + 2] = (byte)(sample24 >> 16);
         }
 
         lock (_writeLock)
@@ -533,12 +539,17 @@ public class RecordingEngine : IDisposable
     {
         if (_writer == null || sampleCount == 0) return;
 
-        int outputSize = sampleCount * 2;
-        var shortSpan = MemoryMarshal.Cast<byte, short>(_outputBuffer.AsSpan(0, outputSize));
+        int outputSize = sampleCount * 3; // 24-bit = 3 bytes per sample
 
+        // 24-bit 변환 (float -> 24-bit PCM) - Span으로 최적화
+        var outputSpan = _outputBuffer.AsSpan(0, outputSize);
         for (int i = 0; i < sampleCount; i++)
         {
-            shortSpan[i] = (short)(mixBuffer[i] * 32767);
+            int sample24 = (int)(mixBuffer[i] * 8388607); // 2^23 - 1
+            int byteIndex = i * 3;
+            outputSpan[byteIndex] = (byte)sample24;
+            outputSpan[byteIndex + 1] = (byte)(sample24 >> 8);
+            outputSpan[byteIndex + 2] = (byte)(sample24 >> 16);
         }
 
         lock (_writeLock)

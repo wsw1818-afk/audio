@@ -6,20 +6,16 @@ namespace AudioRecorder.Audio;
 
 /// <summary>
 /// 고성능 오디오 레벨 미터 - Peak 레벨 계산
-/// SIMD 가속 및 Span 기반 처리로 최적화
+/// SIMD 가속 및 Lock-free 처리로 최적화
 /// </summary>
 public class LevelMeter
 {
-    private float _peakLevel;
-    private readonly object _lock = new();
+    private volatile float _peakLevel;
 
     /// <summary>
     /// 현재 Peak 레벨 (0.0 ~ 1.0)
     /// </summary>
-    public float PeakLevel
-    {
-        get { lock (_lock) return _peakLevel; }
-    }
+    public float PeakLevel => _peakLevel;
 
     /// <summary>
     /// dB 단위의 레벨 (-60 ~ 0)
@@ -28,8 +24,7 @@ public class LevelMeter
     {
         get
         {
-            float peak;
-            lock (_lock) peak = _peakLevel;
+            float peak = _peakLevel;
             if (peak <= 0) return -60f;
             float db = 20f * MathF.Log10(peak);
             return MathF.Max(-60f, db);
@@ -38,7 +33,7 @@ public class LevelMeter
 
     /// <summary>
     /// 오디오 샘플로부터 Peak 레벨 계산 (byte 배열, 32-bit float)
-    /// Span 및 SIMD 최적화 적용
+    /// Span 및 SIMD 최적화 적용, Lock-free
     /// </summary>
     public void ProcessSamples(byte[] buffer, int bytesRecorded)
     {
@@ -47,10 +42,8 @@ public class LevelMeter
         var floatSpan = MemoryMarshal.Cast<byte, float>(buffer.AsSpan(0, bytesRecorded));
         float maxPeak = CalculateMaxAbs(floatSpan);
 
-        lock (_lock)
-        {
-            _peakLevel = MathF.Max(maxPeak, _peakLevel * 0.95f);
-        }
+        // Lock-free 업데이트 (약간의 경합은 허용 - 레벨 미터는 정확도보다 성능 우선)
+        _peakLevel = MathF.Max(maxPeak, _peakLevel * 0.95f);
     }
 
     /// <summary>
@@ -122,9 +115,6 @@ public class LevelMeter
     /// </summary>
     public void Reset()
     {
-        lock (_lock)
-        {
-            _peakLevel = 0;
-        }
+        _peakLevel = 0;
     }
 }

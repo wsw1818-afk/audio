@@ -30,6 +30,12 @@ public class RecordingInfo
     [Bindable(BindableSupport.Yes, BindingDirection.OneWay)]
     public string FileName => Path.GetFileName(FilePath);
 
+    // 파일 타입 판단 (비디오 파일 여부)
+    private static readonly string[] VideoExtensions = { ".mp4", ".mkv", ".webm", ".avi", ".mov" };
+
+    [Bindable(BindableSupport.Yes, BindingDirection.OneWay)]
+    public bool IsVideo => VideoExtensions.Contains(Path.GetExtension(FilePath).ToLowerInvariant());
+
     [Bindable(BindableSupport.Yes, BindingDirection.OneWay)]
     public string FileDetails
     {

@@ -11,8 +11,11 @@ public enum RecordingFormat
     /// <summary>FLAC - 무손실 압축 (50-60% 크기 감소)</summary>
     FLAC,
 
-    /// <summary>MP3 320kbps - 고품질 손실 압축</summary>
-    MP3_320
+    /// <summary>MP3 320kbps - 고품질 손실 압축 (음악용)</summary>
+    MP3_320,
+
+    /// <summary>MP3 128kbps - 표준 손실 압축 (음성용)</summary>
+    MP3_128
 }
 
 /// <summary>
@@ -24,7 +27,8 @@ public static class RecordingFormatExtensions
     {
         RecordingFormat.WAV => "WAV (무손실)",
         RecordingFormat.FLAC => "FLAC (무손실 압축)",
-        RecordingFormat.MP3_320 => "MP3 320kbps",
+        RecordingFormat.MP3_320 => "MP3 320kbps (음악용)",
+        RecordingFormat.MP3_128 => "MP3 128kbps (음성용)",
         _ => format.ToString()
     };
 
@@ -32,7 +36,7 @@ public static class RecordingFormatExtensions
     {
         RecordingFormat.WAV => ".wav",
         RecordingFormat.FLAC => ".flac",
-        RecordingFormat.MP3_320 => ".mp3",
+        RecordingFormat.MP3_320 or RecordingFormat.MP3_128 => ".mp3",
         _ => ".wav"
     };
 
@@ -40,7 +44,8 @@ public static class RecordingFormatExtensions
     {
         RecordingFormat.WAV => "가장 높은 음질, 큰 파일",
         RecordingFormat.FLAC => "무손실 압축, 중간 크기",
-        RecordingFormat.MP3_320 => "고품질 압축, 작은 파일",
+        RecordingFormat.MP3_320 => "고품질 압축, 음악 녹음용",
+        RecordingFormat.MP3_128 => "표준 압축, 음성/회의 녹음용",
         _ => ""
     };
 }

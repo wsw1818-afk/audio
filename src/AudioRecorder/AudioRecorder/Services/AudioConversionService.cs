@@ -10,8 +10,9 @@ public enum AudioFormat
 {
     WAV,        // 원본 (무손실)
     FLAC,       // 무손실 압축 (50-60% 크기 감소)
-    MP3_320,    // 고품질 MP3 (320kbps)
+    MP3_320,    // 고품질 MP3 (320kbps) - 음악용
     MP3_192,    // 표준 MP3 (192kbps)
+    MP3_128,    // 표준 MP3 (128kbps) - 음성용
     AAC_256,    // 고품질 AAC/M4A (256kbps)
     OGG_320     // Ogg Vorbis (320kbps)
 }
@@ -86,6 +87,7 @@ public class AudioConversionService
             AudioFormat.FLAC => "-codec:a flac -compression_level 8",
             AudioFormat.MP3_320 => "-codec:a libmp3lame -b:a 320k -q:a 0",
             AudioFormat.MP3_192 => "-codec:a libmp3lame -b:a 192k",
+            AudioFormat.MP3_128 => "-codec:a libmp3lame -b:a 128k",
             AudioFormat.AAC_256 => "-codec:a aac -b:a 256k",
             AudioFormat.OGG_320 => "-codec:a libvorbis -b:a 320k",
             _ => "-codec:a copy"
@@ -100,7 +102,7 @@ public class AudioConversionService
         return format switch
         {
             AudioFormat.FLAC => ".flac",
-            AudioFormat.MP3_320 or AudioFormat.MP3_192 => ".mp3",
+            AudioFormat.MP3_320 or AudioFormat.MP3_192 or AudioFormat.MP3_128 => ".mp3",
             AudioFormat.AAC_256 => ".m4a",
             AudioFormat.OGG_320 => ".ogg",
             _ => ".wav"
@@ -116,8 +118,9 @@ public class AudioConversionService
         {
             AudioFormat.WAV => "WAV (무손실 원본)",
             AudioFormat.FLAC => "FLAC (무손실 압축)",
-            AudioFormat.MP3_320 => "MP3 320kbps (고품질)",
+            AudioFormat.MP3_320 => "MP3 320kbps (음악용)",
             AudioFormat.MP3_192 => "MP3 192kbps (표준)",
+            AudioFormat.MP3_128 => "MP3 128kbps (음성용)",
             AudioFormat.AAC_256 => "AAC/M4A 256kbps",
             AudioFormat.OGG_320 => "OGG Vorbis 320kbps",
             _ => format.ToString()
@@ -173,11 +176,19 @@ public class AudioConversionService
                 CreateNoWindow = true
             };
 
+            Debug.WriteLine($"[FFmpeg] 명령어: {ffmpeg} {startInfo.Arguments}");
+
             using var process = new Process { StartInfo = startInfo };
             process.Start();
 
             var errorOutput = await process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
+
+            Debug.WriteLine($"[FFmpeg] ExitCode: {process.ExitCode}");
+            if (!string.IsNullOrEmpty(errorOutput))
+            {
+                Debug.WriteLine($"[FFmpeg] Output: {errorOutput}");
+            }
 
             if (process.ExitCode == 0 && File.Exists(output))
             {

@@ -86,7 +86,8 @@ public class VideoEncoderService : IDisposable
     /// 비디오 인코딩 시작 (파이프 기반 실시간 인코딩)
     /// </summary>
     public void StartEncoding(string outputPath, int width, int height, int frameRate,
-        VideoFormat format, int bitrate = 8_000_000, bool useHardwareEncoding = true)
+        VideoFormat format, int bitrate = 8_000_000, bool useHardwareEncoding = true, int crf = 23,
+        string? outputResolution = null, string preset = "fast")
     {
         if (!IsFFmpegAvailable)
             throw new InvalidOperationException("FFmpeg를 찾을 수 없습니다.");
@@ -96,19 +97,36 @@ public class VideoEncoderService : IDisposable
 
         _outputPath = outputPath;
         _writtenFrameCount = 0;  // 프레임 카운터 초기화
+        _writeError = false;     // 에러 플래그 초기화
         _isEncoding = true;
 
-        Debug.WriteLine($"[VideoEncoder] StartEncoding - outputPath: {outputPath}, size: {width}x{height}, fps: {frameRate}");
+        Debug.WriteLine($"[VideoEncoder] StartEncoding - outputPath: {outputPath}, size: {width}x{height}, fps: {frameRate}, crf: {crf}, preset: {preset}, outputRes: {outputResolution}");
 
         // 임시 오디오 파일 경로 (나중에 합성용)
         _tempAudioPath = Path.Combine(Path.GetDirectoryName(outputPath) ?? "",
             $"temp_audio_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
 
+        // 스케일링 필터 생성 (출력 해상도 지정 시)
+        var scaleFilter = "";
+        if (!string.IsNullOrEmpty(outputResolution))
+        {
+            var parts = outputResolution.Split('x');
+            if (parts.Length == 2 && int.TryParse(parts[0], out int outWidth) && int.TryParse(parts[1], out int outHeight))
+            {
+                // scale 필터: 출력 해상도로 스케일링, 짝수로 맞춤
+                scaleFilter = $"-vf \"scale={outWidth}:{outHeight}:force_original_aspect_ratio=decrease,pad={outWidth}:{outHeight}:(ow-iw)/2:(oh-ih)/2\" ";
+                Debug.WriteLine($"[VideoEncoder] 스케일링 활성화: {width}x{height} -> {outWidth}x{outHeight}");
+            }
+        }
+
         // 소프트웨어 인코딩 (libx264) 사용 - 표준 H.264
         // Windows Media Player, VLC 등 대부분의 플레이어 지원
         // 곰플레이어 사용 시 K-Lite Codec Pack 설치 권장
+        // CRF 값: 낮을수록 고화질 (0-51, 기본 23)
+        // preset: 느릴수록 고품질 압축 (ultrafast ~ veryslow)
         var arguments = $"-y -f rawvideo -pix_fmt bgra -s {width}x{height} -r {frameRate} -i - " +
-                        $"-c:v libx264 -preset fast -crf 23 -g {frameRate} -pix_fmt yuv420p " +
+                        $"{scaleFilter}" +
+                        $"-c:v libx264 -preset {preset} -crf {crf} -g {frameRate} -pix_fmt yuv420p " +
                         $"-movflags +faststart " +
                         $"\"{outputPath}\"";
 
@@ -195,36 +213,48 @@ public class VideoEncoderService : IDisposable
     }
 
     private long _writtenFrameCount;
+    private volatile bool _writeError;
 
     /// <summary>
-    /// 프레임 쓰기
+    /// 프레임 쓰기 (lock-free 최적화)
     /// </summary>
     public void WriteFrame(byte[] frameData)
     {
-        if (!_isEncoding || _pipeWriter == null)
+        // 빠른 체크 (lock 없이)
+        if (!_isEncoding || _writeError)
+            return;
+
+        var writer = _pipeWriter;
+        if (writer == null)
         {
             if (_writtenFrameCount == 0 || _writtenFrameCount % 30 == 0)
             {
-                Debug.WriteLine($"[VideoEncoder] WriteFrame 스킵 - isEncoding: {_isEncoding}, pipeWriter: {_pipeWriter != null}, frameCount: {_writtenFrameCount}");
+                Debug.WriteLine($"[VideoEncoder] WriteFrame 스킵 - pipeWriter가 null");
             }
             return;
         }
 
         try
         {
-            lock (_writeLock)
+            // 단일 스레드에서만 호출되므로 lock 불필요
+            // (OnFrameAvailable은 캡처 스레드에서만 호출됨)
+            writer.Write(frameData);
+            _writtenFrameCount++;
+
+            if (_writtenFrameCount % 30 == 0) // 매 30프레임마다 로그
             {
-                _pipeWriter.Write(frameData);
-                _writtenFrameCount++;
-                if (_writtenFrameCount % 30 == 0) // 매 30프레임마다 로그
-                {
-                    Debug.WriteLine($"[VideoEncoder] 프레임 {_writtenFrameCount}개 전송 완료 ({frameData.Length} bytes)");
-                }
+                Debug.WriteLine($"[VideoEncoder] 프레임 {_writtenFrameCount}개 전송 완료 ({frameData.Length} bytes)");
             }
+        }
+        catch (ObjectDisposedException)
+        {
+            // 인코딩 중지 중 발생 가능 - 무시
+            _writeError = true;
         }
         catch (Exception ex)
         {
             Debug.WriteLine($"[VideoEncoder] 프레임 쓰기 실패: {ex.Message}");
+            _writeError = true;
         }
     }
 
@@ -276,7 +306,7 @@ public class VideoEncoderService : IDisposable
     /// <summary>
     /// 오디오와 비디오 합성
     /// </summary>
-    public async Task<bool> MuxAudioVideoAsync(string videoPath, string audioPath, string outputPath)
+    public async Task<bool> MuxAudioVideoAsync(string videoPath, string audioPath, string outputPath, int audioBitrate = 192)
     {
         Debug.WriteLine($"[MuxAudioVideo] 시작 - video: {videoPath}, audio: {audioPath}, output: {outputPath}");
         Debug.WriteLine($"[MuxAudioVideo] FFmpegPath: {FFmpegPath}, IsAvailable: {IsFFmpegAvailable}");
@@ -314,12 +344,12 @@ public class VideoEncoderService : IDisposable
         try
         {
             var arguments = $"-y -i \"{videoPath}\" -i \"{audioPath}\" " +
-                           $"-c:v copy -c:a aac -b:a 192k " +
+                           $"-c:v copy -c:a aac -b:a {audioBitrate}k " +
                            $"-map 0:v:0 -map 1:a:0 " +
                            $"-shortest " +
                            $"\"{outputPath}\"";
 
-            Debug.WriteLine($"[MuxAudioVideo] FFmpeg 인자: {arguments}");
+            Debug.WriteLine($"[MuxAudioVideo] FFmpeg 인자: {arguments} (audio bitrate: {audioBitrate}kbps)");
 
             var startInfo = new ProcessStartInfo
             {

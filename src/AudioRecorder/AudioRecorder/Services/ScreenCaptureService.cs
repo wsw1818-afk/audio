@@ -37,6 +37,12 @@ public class ScreenCaptureService : IDisposable
     [DllImport("user32.dll")]
     private static extern bool DrawIcon(IntPtr hDC, int x, int y, IntPtr hIcon);
 
+    // PrintWindow API - 하드웨어 가속 창 캡처용
+    [DllImport("user32.dll")]
+    private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+    private const uint PW_RENDERFULLCONTENT = 0x00000002; // Windows 8.1+ DirectX 콘텐츠 캡처
+
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
 
@@ -191,14 +197,25 @@ public class ScreenCaptureService : IDisposable
         graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighSpeed;
         graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
 
+        // 창 캡처 모드 여부
+        bool isWindowCapture = _region.Type == CaptureRegionType.Window && _region.WindowHandle != IntPtr.Zero;
+
         while (_isCapturing)
         {
             frameStopwatch.Restart();
 
             try
             {
-                // 화면 캡처
-                graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
+                if (isWindowCapture)
+                {
+                    // 창 캡처: PrintWindow API 사용 (하드웨어 가속 앱 지원)
+                    CaptureWindow(_region.WindowHandle, graphics, bitmap, bounds);
+                }
+                else
+                {
+                    // 화면/영역 캡처: CopyFromScreen 사용
+                    graphics.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size, CopyPixelOperation.SourceCopy);
+                }
 
                 // 커서 그리기
                 if (_showCursor)
@@ -260,6 +277,32 @@ public class ScreenCaptureService : IDisposable
     }
 
     /// <summary>
+    /// PrintWindow API를 사용한 창 캡처 (하드웨어 가속 앱 지원)
+    /// </summary>
+    private void CaptureWindow(IntPtr hwnd, Graphics graphics, Bitmap bitmap, Rectangle bounds)
+    {
+        // 먼저 비트맵을 투명으로 클리어
+        graphics.Clear(Color.Black);
+
+        var hdc = graphics.GetHdc();
+        try
+        {
+            // PW_RENDERFULLCONTENT 플래그로 DirectX 콘텐츠 캡처 시도
+            bool success = PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT);
+
+            if (!success)
+            {
+                // 실패 시 기본 PrintWindow 시도
+                PrintWindow(hwnd, hdc, 0);
+            }
+        }
+        finally
+        {
+            graphics.ReleaseHdc(hdc);
+        }
+    }
+
+    /// <summary>
     /// 커서 그리기
     /// </summary>
     private void DrawCursor(Graphics graphics, Rectangle captureArea)
@@ -294,9 +337,22 @@ public class ScreenCaptureService : IDisposable
     }
 
     /// <summary>
-    /// 현재 프레임 데이터 가져오기
+    /// 현재 프레임 데이터 가져오기 (내부 버퍼 직접 반환 - 복사 없음)
+    /// 주의: 반환된 배열은 다음 프레임에서 덮어쓰여질 수 있으므로
+    /// 즉시 사용하거나 필요시 CopyCurrentFrameTo를 사용할 것
     /// </summary>
     public byte[]? GetCurrentFrame()
+    {
+        lock (_frameLock)
+        {
+            return _currentFrame;
+        }
+    }
+
+    /// <summary>
+    /// 현재 프레임 복사본 가져오기 (메모리 할당 발생)
+    /// </summary>
+    public byte[]? GetCurrentFrameCopy()
     {
         lock (_frameLock)
         {

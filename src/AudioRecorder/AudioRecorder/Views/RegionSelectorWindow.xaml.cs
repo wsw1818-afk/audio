@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using AudioRecorder.Models;
+using WinForms = System.Windows.Forms;
 using WpfRectangle = System.Windows.Shapes.Rectangle;
 
 namespace AudioRecorder.Views;
@@ -123,15 +124,47 @@ public partial class RegionSelectorWindow : Window
             return;
         }
 
-        // 선택 영역 저장
+        // 가상 화면 좌표 계산
+        int virtualX = (int)(Canvas.GetLeft(_selectionRect) + Left);
+        int virtualY = (int)(Canvas.GetTop(_selectionRect) + Top);
+        int width = (int)_selectionRect.Width;
+        int height = (int)_selectionRect.Height;
+
+        // 영역 중심점이 어느 모니터에 있는지 확인
+        var centerPoint = new System.Drawing.Point(virtualX + width / 2, virtualY + height / 2);
+        var screens = WinForms.Screen.AllScreens;
+        int monitorIndex = 0;
+        WinForms.Screen? targetScreen = null;
+
+        for (int i = 0; i < screens.Length; i++)
+        {
+            if (screens[i].Bounds.Contains(centerPoint))
+            {
+                monitorIndex = i;
+                targetScreen = screens[i];
+                break;
+            }
+        }
+
+        // 타겟 모니터를 찾지 못했으면 주 모니터 사용
+        if (targetScreen == null)
+        {
+            targetScreen = WinForms.Screen.PrimaryScreen ?? screens[0];
+            monitorIndex = Array.IndexOf(screens, targetScreen);
+        }
+
+        // 해당 모니터 기준 상대 좌표로 변환
+        int relativeX = virtualX - targetScreen.Bounds.X;
+        int relativeY = virtualY - targetScreen.Bounds.Y;
+
+        System.Diagnostics.Debug.WriteLine($"[RegionSelector] 가상 좌표: ({virtualX}, {virtualY}), 모니터 인덱스: {monitorIndex}, 모니터 원점: ({targetScreen.Bounds.X}, {targetScreen.Bounds.Y}), 상대 좌표: ({relativeX}, {relativeY})");
+
+        // 선택 영역 저장 (모니터 기준 상대 좌표)
         SelectedRegion = new CaptureRegion
         {
             Type = CaptureRegionType.CustomRegion,
-            Bounds = new System.Drawing.Rectangle(
-                (int)(Canvas.GetLeft(_selectionRect) + Left),
-                (int)(Canvas.GetTop(_selectionRect) + Top),
-                (int)_selectionRect.Width,
-                (int)_selectionRect.Height)
+            MonitorIndex = monitorIndex,
+            Bounds = new System.Drawing.Rectangle(relativeX, relativeY, width, height)
         };
 
         IsRegionSelected = true;
