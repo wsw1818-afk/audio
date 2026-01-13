@@ -23,11 +23,30 @@ public enum AudioFormat
 public class AudioConversionService
 {
     private string? _ffmpegPath;
+    private readonly string _logPath;
 
     public event EventHandler<AudioConversionProgressEventArgs>? ProgressChanged;
     public event EventHandler<AudioConversionCompletedEventArgs>? ConversionCompleted;
 
     public bool IsFFmpegAvailable => FindFFmpeg() != null;
+
+    public AudioConversionService()
+    {
+        // 로그 파일 경로 설정 (바탕화면에 저장 - 쉽게 확인 가능)
+        var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        _logPath = Path.Combine(desktopPath, "ffmpeg_conversion.log");
+    }
+
+    private void Log(string message)
+    {
+        var logMessage = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
+        Debug.WriteLine(logMessage);
+        try
+        {
+            File.AppendAllText(_logPath, logMessage + Environment.NewLine);
+        }
+        catch { }
+    }
 
     public string? FindFFmpeg()
     {
@@ -82,14 +101,16 @@ public class AudioConversionService
     /// </summary>
     private string GetEncodingOptions(AudioFormat format)
     {
+        // -threads 1: 단일 스레드로 메모리 사용량 감소 (대용량 파일 안정성)
+        // -reservoir 0: MP3 비트 저장소 비활성화 (스트리밍 안정성)
         return format switch
         {
-            AudioFormat.FLAC => "-codec:a flac -compression_level 8",
-            AudioFormat.MP3_320 => "-codec:a libmp3lame -b:a 320k -q:a 0",
-            AudioFormat.MP3_192 => "-codec:a libmp3lame -b:a 192k",
-            AudioFormat.MP3_128 => "-codec:a libmp3lame -b:a 128k",
-            AudioFormat.AAC_256 => "-codec:a aac -b:a 256k",
-            AudioFormat.OGG_320 => "-codec:a libvorbis -b:a 320k",
+            AudioFormat.FLAC => "-threads 1 -codec:a flac -compression_level 5",
+            AudioFormat.MP3_320 => "-threads 1 -codec:a libmp3lame -b:a 320k -q:a 0",
+            AudioFormat.MP3_192 => "-threads 1 -codec:a libmp3lame -b:a 192k",
+            AudioFormat.MP3_128 => "-threads 1 -codec:a libmp3lame -b:a 128k",
+            AudioFormat.AAC_256 => "-threads 1 -codec:a aac -b:a 256k",
+            AudioFormat.OGG_320 => "-threads 1 -codec:a libvorbis -b:a 320k",
             _ => "-codec:a copy"
         };
     }
@@ -135,7 +156,7 @@ public class AudioConversionService
         var ffmpeg = FindFFmpeg();
         if (ffmpeg == null)
         {
-            Debug.WriteLine("[FFmpeg] FFmpeg를 찾을 수 없습니다.");
+            Log("[FFmpeg] FFmpeg를 찾을 수 없습니다.");
             ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
             {
                 Success = false,
@@ -146,7 +167,7 @@ public class AudioConversionService
 
         if (!File.Exists(inputPath))
         {
-            Debug.WriteLine($"[FFmpeg] 원본 파일 없음: {inputPath}");
+            Log($"[FFmpeg] 원본 파일 없음: {inputPath}");
             ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
             {
                 Success = false,
@@ -157,17 +178,18 @@ public class AudioConversionService
 
         var inputFileInfo = new FileInfo(inputPath);
         var inputSizeMB = inputFileInfo.Length / (1024.0 * 1024);
-        Debug.WriteLine($"[FFmpeg] 입력 파일 크기: {inputSizeMB:F1} MB");
+        Log($"[FFmpeg] 입력 파일 크기: {inputSizeMB:F1} MB");
 
         var extension = GetExtension(format);
         var output = outputPath ?? Path.ChangeExtension(inputPath, extension);
         var encodingOptions = GetEncodingOptions(format);
         var formatName = GetDisplayName(format);
 
-        // 파일 크기에 따른 타임아웃 계산 (100MB당 1분, 최소 2분, 최대 30분)
-        var timeoutMinutes = Math.Clamp((int)(inputSizeMB / 100) + 2, 2, 30);
+        // 파일 크기에 따른 타임아웃 계산 (50MB당 1분, 최소 3분, 최대 60분)
+        // 2시간 녹음 (약 2GB) = 약 43분 타임아웃
+        var timeoutMinutes = Math.Clamp((int)(inputSizeMB / 50) + 3, 3, 60);
         var timeout = TimeSpan.FromMinutes(timeoutMinutes);
-        Debug.WriteLine($"[FFmpeg] 타임아웃: {timeoutMinutes}분");
+        Log($"[FFmpeg] 타임아웃: {timeoutMinutes}분 (파일 크기: {inputSizeMB:F0}MB)");
 
         try
         {
@@ -177,17 +199,31 @@ public class AudioConversionService
                 Progress = 0
             });
 
+            // 기존 출력 파일이 있으면 먼저 삭제
+            if (File.Exists(output))
+            {
+                try { File.Delete(output); }
+                catch (Exception ex)
+                {
+                    Log($"[FFmpeg] 기존 파일 삭제 실패: {ex.Message}");
+                }
+            }
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = ffmpeg,
-                Arguments = $"-i \"{inputPath}\" {encodingOptions} -y \"{output}\"",
+                // -stats 제거하고 -loglevel error로 출력 최소화 (대용량 파일 안정성)
+                Arguments = $"-i \"{inputPath}\" {encodingOptions} -y -loglevel error \"{output}\"",
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
-                CreateNoWindow = true
+                CreateNoWindow = true,
+                // 작업 디렉토리를 출력 폴더로 설정
+                WorkingDirectory = Path.GetDirectoryName(output) ?? Environment.CurrentDirectory
             };
 
-            Debug.WriteLine($"[FFmpeg] 명령어: {ffmpeg} {startInfo.Arguments}");
+            Log($"[FFmpeg] 명령어: {ffmpeg} {startInfo.Arguments}");
+            Log($"[FFmpeg] 작업 디렉토리: {startInfo.WorkingDirectory}");
 
             using var process = new Process { StartInfo = startInfo };
             using var cts = new CancellationTokenSource(timeout);
@@ -201,11 +237,20 @@ public class AudioConversionService
                     if (errorLines.Count >= 50)
                         errorLines.RemoveAt(0);
                     errorLines.Add(e.Data);
+                    Log($"[FFmpeg] {e.Data}");
                 }
             };
 
             process.Start();
+
+            // 프로세스 우선순위를 낮춰서 시스템 안정성 확보
+            try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+
             process.BeginErrorReadLine();
+            // stdout도 읽어야 프로세스가 블록되지 않음
+            process.BeginOutputReadLine();
+
+            Log($"[FFmpeg] 프로세스 시작 (PID: {process.Id})");
 
             try
             {
@@ -213,7 +258,7 @@ public class AudioConversionService
             }
             catch (OperationCanceledException)
             {
-                Debug.WriteLine($"[FFmpeg] 타임아웃 ({timeoutMinutes}분) - 프로세스 강제 종료");
+                Log($"[FFmpeg] 타임아웃 ({timeoutMinutes}분) - 프로세스 강제 종료");
                 try { process.Kill(true); } catch { }
 
                 ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
@@ -225,32 +270,39 @@ public class AudioConversionService
             }
 
             var errorOutput = string.Join(Environment.NewLine, errorLines.TakeLast(10));
-            Debug.WriteLine($"[FFmpeg] ExitCode: {process.ExitCode}");
+            Log($"[FFmpeg] ExitCode: {process.ExitCode}");
             if (!string.IsNullOrEmpty(errorOutput))
             {
-                Debug.WriteLine($"[FFmpeg] 마지막 출력:\n{errorOutput}");
+                Log($"[FFmpeg] 마지막 출력:\n{errorOutput}");
             }
+
+            // 파일이 완전히 쓰여질 때까지 잠시 대기 (대용량 파일 버퍼 플러시)
+            await Task.Delay(100);
 
             if (process.ExitCode == 0 && File.Exists(output))
             {
                 var outputSize = new FileInfo(output).Length;
                 var inputSize = inputFileInfo.Length;
 
-                // 출력 파일이 너무 작으면 (1KB 미만) 실패로 처리
-                if (outputSize < 1024)
+                Log($"[FFmpeg] 출력 파일 크기: {outputSize} bytes ({outputSize / (1024.0 * 1024):F1} MB)");
+
+                // 출력 파일이 너무 작으면 실패로 처리
+                // MP3 128kbps: 약 1MB/분, 최소 10KB 이상이어야 함
+                var minOutputSize = Math.Max(1024, inputSize / 200); // 입력의 0.5% 이상
+                if (outputSize < minOutputSize)
                 {
-                    Debug.WriteLine($"[FFmpeg] 출력 파일이 너무 작음: {outputSize} bytes");
+                    Log($"[FFmpeg] 출력 파일이 너무 작음: {outputSize} bytes (최소 {minOutputSize} bytes 필요)");
                     try { File.Delete(output); } catch { }
                     ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
                     {
                         Success = false,
-                        ErrorMessage = "변환된 파일이 손상되었습니다."
+                        ErrorMessage = $"변환된 파일이 손상되었습니다. (크기: {outputSize} bytes)"
                     });
                     return false;
                 }
 
                 var compressionRatio = (1 - (double)outputSize / inputSize) * 100;
-                Debug.WriteLine($"[FFmpeg] 변환 성공: {outputSize / (1024.0 * 1024):F1} MB (압축률: {compressionRatio:F1}%)");
+                Log($"[FFmpeg] 변환 성공: {outputSize / (1024.0 * 1024):F1} MB (압축률: {compressionRatio:F1}%)");
 
                 ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
                 {
@@ -265,7 +317,7 @@ public class AudioConversionService
             }
             else
             {
-                Debug.WriteLine($"[FFmpeg] 변환 실패 - ExitCode: {process.ExitCode}, FileExists: {File.Exists(output)}");
+                Log($"[FFmpeg] 변환 실패 - ExitCode: {process.ExitCode}, FileExists: {File.Exists(output)}");
                 ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
                 {
                     Success = false,
@@ -276,7 +328,7 @@ public class AudioConversionService
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[FFmpeg] 예외 발생: {ex.Message}");
+            Log($"[FFmpeg] 예외 발생: {ex.Message}");
             ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
             {
                 Success = false,

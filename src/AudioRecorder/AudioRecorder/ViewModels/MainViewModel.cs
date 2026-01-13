@@ -674,6 +674,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         // WAV가 아닌 포맷은 백그라운드에서 변환
         var formatName = targetFormat.GetDisplayName();
+        var fileSizeMB = new FileInfo(wavFilePath).Length / (1024.0 * 1024);
+        System.Diagnostics.Debug.WriteLine($"[StopRecording] WAV 파일 크기: {fileSizeMB:F1} MB");
         StatusText = $"{formatName}로 변환 중... (백그라운드)";
 
         // 로컬 변수로 복사 (클로저 문제 방지)
@@ -688,6 +690,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             try
             {
+                // WAV 파일이 완전히 닫힐 때까지 대기 (파일 핸들 해제 확인)
+                var waitStart = DateTime.Now;
+                var maxWaitSeconds = 10;
+                while ((DateTime.Now - waitStart).TotalSeconds < maxWaitSeconds)
+                {
+                    try
+                    {
+                        // 파일을 열어볼 수 있으면 녹음 완료
+                        using (var fs = new FileStream(localWavPath, FileMode.Open, FileAccess.Read, FileShare.None))
+                        {
+                            var size = fs.Length;
+                            System.Diagnostics.Debug.WriteLine($"[AudioConvert] WAV 파일 준비됨: {size / (1024.0 * 1024):F1} MB");
+                            break;
+                        }
+                    }
+                    catch (IOException)
+                    {
+                        // 파일이 아직 사용 중 - 대기
+                        System.Diagnostics.Debug.WriteLine("[AudioConvert] WAV 파일 대기 중...");
+                        await Task.Delay(500);
+                    }
+                }
+
                 var audioFormat = localTargetFormat switch
                 {
                     RecordingFormat.FLAC => AudioFormat.FLAC,

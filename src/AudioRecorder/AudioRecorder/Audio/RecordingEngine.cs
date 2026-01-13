@@ -123,6 +123,13 @@ public class RecordingEngine : IDisposable
             // WAV 파일 라이터 생성
             _writer = new WaveFileWriter(_currentFilePath, _outputFormat);
 
+            // WAV 헤더 공간 확보 - 헤더가 확실히 기록되었는지 확인
+            // WaveFileWriter가 내부적으로 44바이트 헤더를 예약하지만,
+            // 대용량 파일에서 Dispose 시 헤더 업데이트가 실패할 수 있으므로
+            // 시작 시 Flush하여 헤더가 디스크에 기록되도록 함
+            _writer.Flush();
+            Debug.WriteLine($"[RecordingEngine] WAV 파일 생성: {_currentFilePath}");
+
             // 주기적 Flush 타이머 (5초마다)
             _flushTimer = new System.Threading.Timer(_ =>
             {
@@ -203,9 +210,51 @@ public class RecordingEngine : IDisposable
         // 남은 버퍼 데이터 플러시
         FlushRemainingBuffers();
 
-        // 파일 닫기
-        _writer?.Dispose();
-        _writer = null;
+        // 파일 안전하게 닫기 (WAV 헤더 업데이트 보장)
+        string filePath = _currentFilePath;
+        long bytesWritten = _bytesWritten;
+        WaveFormat format = _outputFormat;
+
+        lock (_writeLock)
+        {
+            if (_writer != null)
+            {
+                try
+                {
+                    _writer.Flush();
+                    Debug.WriteLine($"[RecordingEngine] WAV 파일 Flush 완료, 크기: {_bytesWritten} bytes");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[RecordingEngine] Flush 오류: {ex.Message}");
+                }
+
+                try
+                {
+                    _writer.Dispose();
+                    Debug.WriteLine("[RecordingEngine] WAV 파일 Dispose 완료");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[RecordingEngine] Dispose 오류: {ex.Message}");
+                }
+
+                _writer = null;
+            }
+        }
+
+        // 파일이 완전히 닫힐 때까지 잠시 대기
+        Thread.Sleep(100);
+
+        // WAV 헤더 검증 및 복구 (대용량 파일에서 헤더 손상 방지)
+        try
+        {
+            RepairWavHeaderIfNeeded(filePath, bytesWritten, format);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[RecordingEngine] WAV 헤더 복구 실패: {ex.Message}");
+        }
 
         Cleanup();
         OnStateChanged();
@@ -557,6 +606,190 @@ public class RecordingEngine : IDisposable
             _writer?.Write(_outputBuffer, 0, outputSize);
             _bytesWritten += outputSize;
         }
+    }
+
+    /// <summary>
+    /// WAV 파일 헤더가 손상된 경우 복구
+    /// WaveFileWriter.Dispose()가 헤더 업데이트에 실패한 경우 직접 복구
+    /// </summary>
+    private void RepairWavHeaderIfNeeded(string filePath, long dataSize, WaveFormat format)
+    {
+        if (!File.Exists(filePath)) return;
+
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite);
+        var header = new byte[44]; // 전체 WAV 헤더 크기
+        fs.Read(header, 0, Math.Min(44, (int)fs.Length));
+
+        // RIFF 마커 확인 (offset 0-3)
+        if (header[0] != 'R' || header[1] != 'I' || header[2] != 'F' || header[3] != 'F')
+        {
+            Debug.WriteLine("[RecordingEngine] RIFF 마커 없음 - 복구 불가");
+            return;
+        }
+
+        // WAVE 마커 확인 (offset 8-11) - 정확히 "WAVE" 문자열이어야 함
+        bool hasValidWaveMarker = header[8] == 'W' && header[9] == 'A' && header[10] == 'V' && header[11] == 'E';
+
+        // fmt 청크 확인 (offset 12-15) - 정확히 "fmt " 문자열이어야 함
+        bool hasValidFmtChunk = header[12] == 'f' && header[13] == 'm' && header[14] == 't' && header[15] == ' ';
+
+        if (hasValidWaveMarker && hasValidFmtChunk)
+        {
+            Debug.WriteLine("[RecordingEngine] WAV 헤더 정상 (WAVE/fmt 확인됨)");
+            return;
+        }
+
+        // 헤더가 손상된 패턴 로깅 (디버깅용)
+        Debug.WriteLine($"[RecordingEngine] WAV 헤더 손상 감지:");
+        Debug.WriteLine($"  - WAVE 마커: 0x{header[8]:X2} 0x{header[9]:X2} 0x{header[10]:X2} 0x{header[11]:X2} (expected: WAVE)");
+        Debug.WriteLine($"  - fmt 청크: 0x{header[12]:X2} 0x{header[13]:X2} 0x{header[14]:X2} 0x{header[15]:X2} (expected: fmt )");
+        Debug.WriteLine($"  - 헤더 hex: {BitConverter.ToString(header, 0, 20)}");
+
+        fs.Close(); // 파일 스트림 닫기
+
+        // 파일 복구: 새 파일에 올바른 헤더 + 원본 데이터 복사
+        RepairWavFileWithCorrectHeader(filePath, format);
+    }
+
+    /// <summary>
+    /// WAV 파일을 새로 생성하여 올바른 헤더와 함께 저장
+    /// 대용량 파일(3GB+)도 효율적으로 처리 (청크 단위 복사)
+    /// </summary>
+    private void RepairWavFileWithCorrectHeader(string filePath, WaveFormat format)
+    {
+        var tempPath = filePath + ".repair.tmp";
+        const int COPY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB 청크 (대용량 파일 처리 속도 향상)
+
+        try
+        {
+            using (var srcFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, COPY_BUFFER_SIZE))
+            using (var dstFs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, COPY_BUFFER_SIZE))
+            {
+                // 손상된 파일에서 오디오 데이터 시작 위치 찾기
+                // 패턴 1: RIFF + size(4) + 0x00... (헤더가 null로 채워짐) -> offset 44부터 데이터
+                // 패턴 2: RIFF + size(4) + 오디오데이터 (헤더 없이 바로 데이터) -> offset 8부터 데이터
+
+                // 헤더 영역 읽기
+                var headerArea = new byte[64];
+                srcFs.Read(headerArea, 0, Math.Min(64, (int)Math.Min(srcFs.Length, 64)));
+                srcFs.Seek(0, SeekOrigin.Begin);
+
+                long audioDataStart;
+
+                // offset 8-43 영역이 대부분 0인지 확인 (null 헤더 패턴)
+                int nullCount = 0;
+                for (int i = 8; i < 44 && i < headerArea.Length; i++)
+                {
+                    if (headerArea[i] == 0) nullCount++;
+                }
+
+                if (nullCount > 30) // 36바이트 중 30바이트 이상이 0이면 null 헤더
+                {
+                    // 패턴 1: 헤더 영역이 null로 채워짐 - offset 44부터 실제 데이터
+                    audioDataStart = 44;
+                    Debug.WriteLine("[RecordingEngine] 복구 패턴: null 헤더 (offset 44부터 데이터)");
+                }
+                else
+                {
+                    // 패턴 2: 헤더 없이 바로 데이터 - offset 8부터 실제 데이터
+                    audioDataStart = 8;
+                    Debug.WriteLine("[RecordingEngine] 복구 패턴: 헤더 없음 (offset 8부터 데이터)");
+                }
+
+                long audioDataSize = srcFs.Length - audioDataStart;
+
+                Debug.WriteLine($"[RecordingEngine] 복구: 원본={srcFs.Length / (1024.0 * 1024.0):F1}MB, 오디오 시작={audioDataStart}, 오디오={audioDataSize / (1024.0 * 1024.0):F1}MB");
+
+                // 새 WAV 헤더 작성 (44바이트) - long 타입으로 대용량 지원
+                WriteWavHeader(dstFs, audioDataSize, format);
+
+                // 오디오 데이터 복사 (청크 단위로 효율적 처리)
+                srcFs.Seek(audioDataStart, SeekOrigin.Begin);
+                var buffer = new byte[COPY_BUFFER_SIZE];
+                int bytesRead;
+                long totalCopied = 0;
+                var sw = Stopwatch.StartNew();
+
+                while ((bytesRead = srcFs.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    dstFs.Write(buffer, 0, bytesRead);
+                    totalCopied += bytesRead;
+
+                    // 진행 상황 로깅 (500MB마다)
+                    if (totalCopied % (500 * 1024 * 1024) < COPY_BUFFER_SIZE)
+                    {
+                        double percent = (double)totalCopied / audioDataSize * 100;
+                        double mbPerSec = totalCopied / (1024.0 * 1024.0) / sw.Elapsed.TotalSeconds;
+                        Debug.WriteLine($"[RecordingEngine] 복구 진행: {totalCopied / (1024 * 1024)}MB / {audioDataSize / (1024 * 1024)}MB ({percent:F1}%, {mbPerSec:F0}MB/s)");
+                    }
+                }
+
+                dstFs.Flush();
+                sw.Stop();
+                Debug.WriteLine($"[RecordingEngine] 복구 완료: {totalCopied / (1024.0 * 1024.0):F1}MB, 소요시간: {sw.Elapsed.TotalSeconds:F1}초");
+            }
+
+            // 원본 파일을 백업하고 복구된 파일로 교체
+            var backupPath = filePath + ".corrupted.bak";
+            if (File.Exists(backupPath))
+                File.Delete(backupPath);
+
+            File.Move(filePath, backupPath);
+            File.Move(tempPath, filePath);
+
+            // 백업 파일 삭제 (복구 성공 시)
+            File.Delete(backupPath);
+
+            Debug.WriteLine($"[RecordingEngine] WAV 파일 복구 완료: {filePath}");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[RecordingEngine] WAV 파일 복구 실패: {ex.Message}");
+
+            // 임시 파일 정리
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// WAV 헤더 작성 (44바이트 표준 PCM 헤더)
+    /// 대용량 파일(2GB+)도 지원 - RF64 형식은 사용하지 않고 표준 WAV 최대값 사용
+    /// </summary>
+    private void WriteWavHeader(FileStream fs, long dataSize, WaveFormat format)
+    {
+        using var bw = new BinaryWriter(fs, System.Text.Encoding.UTF8, leaveOpen: true);
+
+        // WAV 파일의 크기 필드는 32비트이므로 최대 약 4GB까지 표현 가능
+        // 하지만 signed int를 사용하는 일부 구현에서는 2GB 제한이 있음
+        // 여기서는 uint로 최대 4GB까지 지원
+        uint maxSize = uint.MaxValue - 36; // 약 4GB
+        uint actualDataSize = (uint)Math.Min((ulong)dataSize, maxSize);
+        uint fileSize = actualDataSize + 36; // 전체 크기 - 8 (RIFF/size 제외)
+
+        Debug.WriteLine($"[RecordingEngine] WriteWavHeader: dataSize={dataSize}, actualDataSize={actualDataSize}");
+
+        // RIFF 청크
+        bw.Write(new[] { (byte)'R', (byte)'I', (byte)'F', (byte)'F' });
+        bw.Write(fileSize); // uint로 쓰기
+
+        // WAVE 마커
+        bw.Write(new[] { (byte)'W', (byte)'A', (byte)'V', (byte)'E' });
+
+        // fmt 청크
+        bw.Write(new[] { (byte)'f', (byte)'m', (byte)'t', (byte)' ' });
+        bw.Write(16); // fmt 청크 크기 (PCM은 16)
+        bw.Write((short)1); // 오디오 포맷 (1 = PCM)
+        bw.Write((short)format.Channels); // 채널 수
+        bw.Write(format.SampleRate); // 샘플레이트
+        bw.Write(format.AverageBytesPerSecond); // 바이트/초
+        bw.Write((short)format.BlockAlign); // 블록 정렬
+        bw.Write((short)format.BitsPerSample); // 비트/샘플
+
+        // data 청크
+        bw.Write(new[] { (byte)'d', (byte)'a', (byte)'t', (byte)'a' });
+        bw.Write(actualDataSize); // uint로 쓰기
+
+        bw.Flush();
     }
 
     private void OnMicRecordingStopped(object? sender, StoppedEventArgs e)
