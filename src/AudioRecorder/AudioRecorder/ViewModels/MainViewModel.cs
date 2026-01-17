@@ -16,6 +16,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ScreenRecordingEngine _screenRecordingEngine;
     private readonly AudioPlayer _audioPlayer;
     private readonly AudioConversionService _conversionService;
+    private readonly VideoConversionService _videoConversionService;
     private readonly DispatcherTimer _timer;
     private readonly DispatcherTimer _playbackTimer;
     private readonly AppSettings _settings;
@@ -228,6 +229,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public IReadOnlyList<string> PositionOptions { get; } = new[] { "좌상단", "우상단", "좌하단", "우하단" };
     public IReadOnlyList<string> WebcamSizeOptions { get; } = new[] { "소", "중", "대" };
 
+    // ========== 자동 동영상 압축 설정 ==========
+    [ObservableProperty]
+    private VideoCompressionQuality _autoVideoCompression = VideoCompressionQuality.None;
+
+    // 수동 압축 진행 상태
+    [ObservableProperty]
+    private bool _isCompressingVideo;
+
+    [ObservableProperty]
+    private string _compressionStatus = "";
+
+    [ObservableProperty]
+    private int _compressionProgress;
+
+    public IReadOnlyList<string> VideoCompressionOptions { get; } = new[] { "압축 안함", "최고 품질 (H.265)", "보통 품질 (H.265, 용량↓)" };
+
+    public string SelectedVideoCompressionText
+    {
+        get => AutoVideoCompression switch
+        {
+            VideoCompressionQuality.High => "최고 품질 (H.265)",
+            VideoCompressionQuality.Normal => "보통 품질 (H.265, 용량↓)",
+            _ => "압축 안함"
+        };
+        set
+        {
+            AutoVideoCompression = value switch
+            {
+                "최고 품질 (H.265)" => VideoCompressionQuality.High,
+                "보통 품질 (H.265, 용량↓)" => VideoCompressionQuality.Normal,
+                _ => VideoCompressionQuality.None
+            };
+            OnPropertyChanged();
+        }
+    }
+
     [ObservableProperty]
     private long _frameCount;
 
@@ -297,6 +334,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _screenRecordingEngine = new ScreenRecordingEngine(_deviceManager);
         _audioPlayer = new AudioPlayer();
         _conversionService = new AudioConversionService();
+        _videoConversionService = new VideoConversionService();
         _settings = AppSettings.Load();
 
         // 설정 적용
@@ -307,6 +345,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _systemVolume = _settings.SystemVolume;
         _selectedRecordingFormat = _settings.RecordingFormat;
         _closeAction = _settings.CloseAction;
+        _autoVideoCompression = _settings.VideoCompressionQuality;
 
         // 녹음 타이머 설정 (UI 업데이트용) - 100ms로 최적화
         _timer = new DispatcherTimer
@@ -440,6 +479,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.LastSystemDeviceId = SelectedOutputDevice?.Id;
         _settings.RecordingFormat = SelectedRecordingFormat;
         _settings.CloseAction = CloseAction;
+        _settings.VideoCompressionQuality = AutoVideoCompression;
         _settings.Save();
 
         SaveRecentFiles();
@@ -1024,6 +1064,119 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await ConvertToFormatAsync(recording, AudioFormat.AAC_256);
     }
 
+    [RelayCommand]
+    private async Task CompressVideoHighAsync(RecordingInfo? recording)
+    {
+        await CompressVideoAsync(recording, VideoQuality.High);
+    }
+
+    [RelayCommand]
+    private async Task CompressVideoNormalAsync(RecordingInfo? recording)
+    {
+        await CompressVideoAsync(recording, VideoQuality.Normal);
+    }
+
+    [RelayCommand]
+    private void CancelVideoCompression()
+    {
+        if (IsCompressingVideo)
+        {
+            _videoConversionService.Cancel();
+            StatusText = "압축 취소 중...";
+        }
+    }
+
+    private async Task CompressVideoAsync(RecordingInfo? recording, VideoQuality quality)
+    {
+        if (recording == null || !File.Exists(recording.FilePath))
+            return;
+
+        if (!recording.IsVideo)
+        {
+            StatusText = "동영상 파일만 압축할 수 있습니다.";
+            return;
+        }
+
+        if (!_videoConversionService.IsFFmpegAvailable)
+        {
+            StatusText = "FFmpeg가 설치되어 있지 않습니다.";
+            return;
+        }
+
+        if (IsCompressingVideo)
+        {
+            StatusText = "이미 압축이 진행 중입니다.";
+            return;
+        }
+
+        IsCompressingVideo = true;
+        CompressionProgress = 0;
+        CompressionStatus = "압축 준비 중...";
+
+        var qualityName = VideoConversionService.GetDisplayName(quality);
+        StatusText = $"{qualityName}로 압축 중: {recording.FileName}...";
+
+        _videoConversionService.ProgressChanged += OnVideoCompressionProgress;
+        _videoConversionService.ConversionCompleted += OnVideoCompressionCompleted;
+
+        try
+        {
+            await _videoConversionService.CompressAsync(recording.FilePath, quality);
+        }
+        finally
+        {
+            _videoConversionService.ProgressChanged -= OnVideoCompressionProgress;
+            _videoConversionService.ConversionCompleted -= OnVideoCompressionCompleted;
+            IsCompressingVideo = false;
+            CompressionProgress = 0;
+            CompressionStatus = "";
+        }
+    }
+
+    private void OnVideoCompressionProgress(object? sender, VideoConversionProgressEventArgs e)
+    {
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            CompressionProgress = e.Progress;
+            CompressionStatus = e.Status;
+            StatusText = e.Status;
+        });
+    }
+
+    private void OnVideoCompressionCompleted(object? sender, VideoConversionCompletedEventArgs e)
+    {
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (e.Success)
+            {
+                var savedMb = (e.OriginalSize - e.ConvertedSize) / (1024.0 * 1024);
+                StatusText = $"압축 완료! ({e.CompressionRatio:F0}% 압축, {savedMb:F1}MB 절약)";
+
+                // 압축된 파일을 목록에 추가
+                if (!string.IsNullOrEmpty(e.OutputPath) && File.Exists(e.OutputPath))
+                {
+                    var fileInfo = new FileInfo(e.OutputPath);
+                    var compressedInfo = new RecordingInfo
+                    {
+                        FilePath = e.OutputPath,
+                        RecordedAt = DateTime.Now,
+                        Duration = TimeSpan.Zero, // 동영상 길이는 나중에 재생 시 확인
+                        FileSize = fileInfo.Length
+                    };
+                    RecentFiles.Insert(0, compressedInfo);
+                    _cachedFilteredFiles = null;
+                    OnPropertyChanged(nameof(FilteredRecentFiles));
+                    OnPropertyChanged(nameof(HasNoFilteredFiles));
+                    SaveRecentFiles();
+                }
+            }
+            else
+            {
+                StatusText = e.ErrorMessage ?? "압축 실패";
+            }
+        });
+    }
+
     private async Task ConvertToFormatAsync(RecordingInfo? recording, AudioFormat format)
     {
         if (recording == null || !File.Exists(recording.FilePath))
@@ -1253,12 +1406,88 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                 // 최근 파일 목록 저장
                 SaveRecentFiles();
+
+                // 자동 동영상 압축 실행
+                if (AutoVideoCompression != VideoCompressionQuality.None &&
+                    _videoConversionService.IsFFmpegAvailable)
+                {
+                    _ = AutoCompressVideoAsync(e.OutputPath, recording);
+                }
             }
             else
             {
                 StatusText = e.ErrorMessage ?? "녹화 실패";
             }
         });
+    }
+
+    /// <summary>
+    /// 자동 동영상 압축 (녹화 완료 후 백그라운드 실행)
+    /// </summary>
+    private async Task AutoCompressVideoAsync(string videoPath, RecordingInfo recording)
+    {
+        try
+        {
+            var quality = AutoVideoCompression == VideoCompressionQuality.High
+                ? VideoQuality.High
+                : VideoQuality.Normal;
+
+            var qualityName = VideoConversionService.GetDisplayName(quality);
+            StatusText = $"자동 압축 중... ({qualityName})";
+
+            _videoConversionService.ProgressChanged += OnVideoCompressionProgress;
+
+            var success = await _videoConversionService.CompressAsync(videoPath, quality);
+
+            _videoConversionService.ProgressChanged -= OnVideoCompressionProgress;
+
+            if (success)
+            {
+                // 압축 완료 후 파일 목록 갱신
+                var compressedPath = Path.Combine(
+                    Path.GetDirectoryName(videoPath) ?? "",
+                    Path.GetFileNameWithoutExtension(videoPath) + "_compressed" + Path.GetExtension(videoPath));
+
+                if (File.Exists(compressedPath))
+                {
+                    var compressedInfo = new FileInfo(compressedPath);
+                    var originalSize = recording.FileSize;
+                    var compressedSize = compressedInfo.Length;
+                    var ratio = (1 - (double)compressedSize / originalSize) * 100;
+
+                    StatusText = $"압축 완료! {originalSize / (1024.0 * 1024):F1}MB → {compressedSize / (1024.0 * 1024):F1}MB ({ratio:F0}% 감소)";
+
+                    // 압축된 파일을 목록에 추가
+                    var compressedRecording = new RecordingInfo
+                    {
+                        FilePath = compressedPath,
+                        RecordedAt = DateTime.Now,
+                        Duration = recording.Duration,
+                        FileSize = compressedSize
+                    };
+
+                    System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+                    {
+                        RecentFiles.Insert(0, compressedRecording);
+                        if (RecentFiles.Count > 10)
+                            RecentFiles.RemoveAt(RecentFiles.Count - 1);
+
+                        _cachedFilteredFiles = null;
+                        OnPropertyChanged(nameof(FilteredRecentFiles));
+                        SaveRecentFiles();
+                    });
+                }
+            }
+            else
+            {
+                StatusText = "자동 압축 실패";
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[AutoCompress] 오류: {ex.Message}");
+            StatusText = "자동 압축 오류";
+        }
     }
 
     // RecordingState가 변경될 때 CanSwitchModeBinding 갱신

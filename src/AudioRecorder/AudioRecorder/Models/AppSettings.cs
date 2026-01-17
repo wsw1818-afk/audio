@@ -4,6 +4,16 @@ using System.Text.Json;
 
 namespace AudioRecorder.Models;
 
+/// <summary>
+/// 자동 동영상 압축 품질
+/// </summary>
+public enum VideoCompressionQuality
+{
+    None,   // 압축 안함
+    High,   // 최고 품질 (CRF 23)
+    Normal  // 보통 품질 (CRF 28)
+}
+
 public class AppSettings
 {
     public string OutputDirectory { get; set; } = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
@@ -16,6 +26,10 @@ public class AppSettings
     public int MaxRecentFiles { get; set; } = 20;
     public RecordingFormat RecordingFormat { get; set; } = RecordingFormat.WAV;
     public CloseAction CloseAction { get; set; } = CloseAction.MinimizeToTray;
+
+    // 자동 동영상 압축 설정
+    public bool AutoCompressVideo { get; set; } = false;
+    public VideoCompressionQuality VideoCompressionQuality { get; set; } = VideoCompressionQuality.None;
 
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

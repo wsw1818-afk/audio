@@ -62,6 +62,26 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
 
+        // 압축 중이면 경고 메시지 표시
+        if (vm.IsCompressingVideo)
+        {
+            var result = System.Windows.MessageBox.Show(
+                "동영상 압축이 진행 중입니다.\n종료하면 압축이 취소되고 불완전한 파일이 생성될 수 있습니다.\n\n정말 종료하시겠습니까?",
+                "압축 진행 중",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (result == MessageBoxResult.No)
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            // 사용자가 종료를 선택하면 압축 취소
+            vm.CancelVideoCompressionCommand.Execute(null);
+            _isExiting = true;
+        }
+
         // 명시적 종료 요청이면 그냥 종료
         if (_isExiting) return;
 
@@ -231,5 +251,25 @@ public partial class MainWindow : Window
     private void OptionsPanel_MouseDown(object sender, MouseButtonEventArgs e)
     {
         e.Handled = true;
+    }
+
+    // 변환/압축 버튼 클릭 시 ContextMenu 열기
+    private void ConvertButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.ContextMenu != null)
+        {
+            btn.ContextMenu.PlacementTarget = btn;
+            btn.ContextMenu.IsOpen = true;
+        }
+    }
+
+    // 압축 버튼 클릭 시 ContextMenu 열기
+    private void CompressButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Button btn && btn.ContextMenu != null)
+        {
+            btn.ContextMenu.PlacementTarget = btn;
+            btn.ContextMenu.IsOpen = true;
+        }
     }
 }

@@ -814,6 +814,24 @@
                                                         Command="{Binding DataContext.OpenInExplorerCommand,
                                                             RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"/>
+                                                <!-- 압축 버튼 (동영상만) -->
+                                                <Button Style="{StaticResource FileItemButtonStyle}"
+                                                        Content="📦" ToolTip="H.265 압축"
+                                                        Background="#FF6B5B"
+                                                        Click="CompressButton_Click"
+                                                        Tag="{Binding}"
+                                                        Visibility="{Binding IsVideo, Converter={StaticResource BoolToVisibilityConverter}}">
+                                                    <Button.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="최고 품질로 압축 (H.265)"
+                                                                      Command="{Binding DataContext.CompressVideoHighCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                      CommandParameter="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                            <MenuItem Header="보통 품질로 압축 (H.265, 용량↓)"
+                                                                      Command="{Binding DataContext.CompressVideoNormalCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                      CommandParameter="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                        </ContextMenu>
+                                                    </Button.ContextMenu>
+                                                </Button>
                                                 <Button Style="{StaticResource FileItemButtonStyle}"
                                                         Content="🗑" ToolTip="삭제"
                                                         Background="{StaticResource DangerColor}"
@@ -962,6 +980,15 @@
                                               IsChecked="{Binding ShowRecordingBorder}"
                                               Foreground="{StaticResource TextColor}"
                                               Margin="0,0,0,8"/>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <TextBlock Text="자동 압축:" FontSize="11"
+                                                   Foreground="{StaticResource SubTextColor}"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <ComboBox ItemsSource="{Binding VideoCompressionOptions}"
+                                                  SelectedItem="{Binding SelectedVideoCompressionText}"
+                                                  Width="160" FontSize="11"/>
+                                    </StackPanel>
 
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,15">
                                         <TextBlock Text="카운트다운:" FontSize="11"
