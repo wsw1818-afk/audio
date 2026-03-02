@@ -4,6 +4,16 @@ using System.IO;
 namespace AudioRecorder.Services;
 
 /// <summary>
+/// 노이즈 제거 강도
+/// </summary>
+public enum NoiseReductionLevel
+{
+    Light,   // 약함 - 미세한 노이즈만 제거
+    Medium,  // 보통 - 일반적인 배경 소음 제거
+    Strong   // 강함 - 강한 노이즈 제거 (음성 왜곡 가능)
+}
+
+/// <summary>
 /// 오디오 포맷 종류
 /// </summary>
 public enum AudioFormat
@@ -32,9 +42,10 @@ public class AudioConversionService
 
     public AudioConversionService()
     {
-        // 로그 파일 경로 설정 (바탕화면에 저장 - 쉽게 확인 가능)
-        var desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        _logPath = Path.Combine(desktopPath, "ffmpeg_conversion.log");
+        // 로그 파일 경로 설정 (%AppData%/AudioRecorder/logs/ 하위에 저장)
+        var appDataPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AudioRecorder", "logs");
+        if (!Directory.Exists(appDataPath)) Directory.CreateDirectory(appDataPath);
+        _logPath = Path.Combine(appDataPath, "ffmpeg_conversion.log");
     }
 
     private void Log(string message)
@@ -45,7 +56,7 @@ public class AudioConversionService
         {
             File.AppendAllText(_logPath, logMessage + Environment.NewLine);
         }
-        catch { }
+        catch (Exception ex) { Debug.WriteLine($"[AudioConversion] {ex.Message}"); }
     }
 
     public string? FindFFmpeg()
@@ -94,6 +105,23 @@ public class AudioConversionService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// FFmpeg 인자로 사용되는 파일 경로에서 위험한 문자를 제거하여 명령어 인젝션을 방어
+    /// </summary>
+    private static string SanitizeFFmpegPath(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+
+        // 명령어 인젝션에 사용될 수 있는 위험 문자 제거
+        char[] dangerousChars = { '"', '|', '&', ';', '`', '$', '(', ')' };
+        var sanitized = path;
+        foreach (var c in dangerousChars)
+        {
+            sanitized = sanitized.Replace(c.ToString(), "");
+        }
+        return sanitized;
     }
 
     /// <summary>
@@ -180,6 +208,19 @@ public class AudioConversionService
         var inputSizeMB = inputFileInfo.Length / (1024.0 * 1024);
         Log($"[FFmpeg] 입력 파일 크기: {inputSizeMB:F1} MB");
 
+        // WAV 파일인 경우 헤더 검증 및 복구 (대용량 파일 손상 방지)
+        if (inputPath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                RepairWavHeaderIfNeeded(inputPath);
+            }
+            catch (Exception ex)
+            {
+                Log($"[FFmpeg] WAV 헤더 복구 실패: {ex.Message}");
+            }
+        }
+
         var extension = GetExtension(format);
         var output = outputPath ?? Path.ChangeExtension(inputPath, extension);
         var encodingOptions = GetEncodingOptions(format);
@@ -209,17 +250,31 @@ public class AudioConversionService
                 }
             }
 
+            // 한글 경로 지원: 입력/출력 파일이 같은 폴더에 있으면 상대 경로 사용
+            var workDir = Path.GetDirectoryName(inputPath) ?? Environment.CurrentDirectory;
+            var inputFileName = SanitizeFFmpegPath(Path.GetFileName(inputPath));
+            var outputFileName = SanitizeFFmpegPath(Path.GetFileName(output));
+
+            // 출력 파일이 다른 폴더면 절대 경로 사용
+            var outputDir = Path.GetDirectoryName(output);
+            var useRelativePath = string.Equals(workDir, outputDir, StringComparison.OrdinalIgnoreCase);
+            var outputArg = useRelativePath ? outputFileName : SanitizeFFmpegPath(output);
+
             var startInfo = new ProcessStartInfo
             {
                 FileName = ffmpeg,
                 // -stats 제거하고 -loglevel error로 출력 최소화 (대용량 파일 안정성)
-                Arguments = $"-i \"{inputPath}\" {encodingOptions} -y -loglevel error \"{output}\"",
+                // 한글 경로 지원: 작업 디렉토리 기준 상대 경로 사용
+                Arguments = $"-i \"{inputFileName}\" {encodingOptions} -y -loglevel error \"{outputArg}\"",
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
                 CreateNoWindow = true,
-                // 작업 디렉토리를 출력 폴더로 설정
-                WorkingDirectory = Path.GetDirectoryName(output) ?? Environment.CurrentDirectory
+                // 한글 경로 지원을 위한 UTF-8 인코딩 설정
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
+                // 작업 디렉토리를 입력 파일 폴더로 설정 (상대 경로 사용)
+                WorkingDirectory = workDir
             };
 
             Log($"[FFmpeg] 명령어: {ffmpeg} {startInfo.Arguments}");
@@ -244,7 +299,7 @@ public class AudioConversionService
             process.Start();
 
             // 프로세스 우선순위를 낮춰서 시스템 안정성 확보
-            try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch { }
+            try { process.PriorityClass = ProcessPriorityClass.BelowNormal; } catch (Exception ex) { Debug.WriteLine($"[AudioConversion] {ex.Message}"); }
 
             process.BeginErrorReadLine();
             // stdout도 읽어야 프로세스가 블록되지 않음
@@ -259,7 +314,7 @@ public class AudioConversionService
             catch (OperationCanceledException)
             {
                 Log($"[FFmpeg] 타임아웃 ({timeoutMinutes}분) - 프로세스 강제 종료");
-                try { process.Kill(true); } catch { }
+                try { process.Kill(true); } catch (Exception ex) { Debug.WriteLine($"[AudioConversion] {ex.Message}"); }
 
                 ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
                 {
@@ -292,7 +347,7 @@ public class AudioConversionService
                 if (outputSize < minOutputSize)
                 {
                     Log($"[FFmpeg] 출력 파일이 너무 작음: {outputSize} bytes (최소 {minOutputSize} bytes 필요)");
-                    try { File.Delete(output); } catch { }
+                    try { File.Delete(output); } catch (Exception ex) { Debug.WriteLine($"[AudioConversion] {ex.Message}"); }
                     ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
                     {
                         Success = false,
@@ -353,6 +408,354 @@ public class AudioConversionService
     public Task<bool> ConvertToFlacAsync(string wavPath, string? outputPath = null)
     {
         return ConvertAsync(wavPath, AudioFormat.FLAC, outputPath);
+    }
+
+    /// <summary>
+    /// 노이즈 제거 (FFmpeg afftdn 필터 사용)
+    /// </summary>
+    public async Task<bool> RemoveNoiseAsync(string inputPath, string? outputPath = null, NoiseReductionLevel level = NoiseReductionLevel.Medium)
+    {
+        var ffmpeg = FindFFmpeg();
+        if (ffmpeg == null)
+        {
+            Log("[FFmpeg] FFmpeg를 찾을 수 없습니다.");
+            ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
+            {
+                Success = false,
+                ErrorMessage = "FFmpeg를 찾을 수 없습니다."
+            });
+            return false;
+        }
+
+        if (!File.Exists(inputPath))
+        {
+            Log($"[FFmpeg] 원본 파일 없음: {inputPath}");
+            return false;
+        }
+
+        var output = outputPath ?? Path.Combine(
+            Path.GetDirectoryName(inputPath) ?? "",
+            Path.GetFileNameWithoutExtension(inputPath) + "_denoised" + Path.GetExtension(inputPath));
+
+        // 노이즈 제거 강도 설정
+        var noiseFloor = level switch
+        {
+            NoiseReductionLevel.Light => -25,
+            NoiseReductionLevel.Medium => -30,
+            NoiseReductionLevel.Strong => -40,
+            _ => -30
+        };
+
+        var levelName = level switch
+        {
+            NoiseReductionLevel.Light => "약함",
+            NoiseReductionLevel.Medium => "보통",
+            NoiseReductionLevel.Strong => "강함",
+            _ => "보통"
+        };
+
+        Log($"[FFmpeg] 노이즈 제거 시작: {inputPath} (강도: {levelName})");
+
+        try
+        {
+            ProgressChanged?.Invoke(this, new AudioConversionProgressEventArgs
+            {
+                Status = $"노이즈 제거 중 ({levelName})...",
+                Progress = 0
+            });
+
+            var workDir = Path.GetDirectoryName(inputPath) ?? Environment.CurrentDirectory;
+            var inputFileName = SanitizeFFmpegPath(Path.GetFileName(inputPath));
+            var outputFileName = SanitizeFFmpegPath(Path.GetFileName(output));
+
+            // FFmpeg 노이즈 제거 필터
+            // afftdn: FFT 기반 노이즈 제거
+            // highpass: 저주파 노이즈 제거 (에어컨 등)
+            // lowpass: 고주파 노이즈 제거 (전자기기 등)
+            var filterChain = $"afftdn=nf={noiseFloor}:tn=1,highpass=f=80,lowpass=f=8000";
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpeg,
+                Arguments = $"-i \"{inputFileName}\" -af \"{filterChain}\" -y \"{outputFileName}\"",
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
+                WorkingDirectory = workDir
+            };
+
+            Log($"[FFmpeg] 명령어: {ffmpeg} {startInfo.Arguments}");
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode == 0 && File.Exists(output))
+            {
+                var inputSize = new FileInfo(inputPath).Length;
+                var outputSize = new FileInfo(output).Length;
+                Log($"[FFmpeg] 노이즈 제거 완료: {output}");
+
+                ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
+                {
+                    Success = true,
+                    OutputPath = output,
+                    OriginalSize = inputSize,
+                    ConvertedSize = outputSize
+                });
+                return true;
+            }
+
+            Log($"[FFmpeg] 노이즈 제거 실패: ExitCode={process.ExitCode}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log($"[FFmpeg] 노이즈 제거 오류: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 구간 추출 (특정 시간대만 잘라내기)
+    /// </summary>
+    public async Task<bool> ExtractSegmentAsync(string inputPath, TimeSpan startTime, TimeSpan endTime, string? outputPath = null)
+    {
+        var ffmpeg = FindFFmpeg();
+        if (ffmpeg == null)
+        {
+            Log("[FFmpeg] FFmpeg를 찾을 수 없습니다.");
+            return false;
+        }
+
+        if (!File.Exists(inputPath))
+        {
+            Log($"[FFmpeg] 원본 파일 없음: {inputPath}");
+            return false;
+        }
+
+        var duration = endTime - startTime;
+        if (duration.TotalSeconds <= 0)
+        {
+            Log("[FFmpeg] 잘못된 시간 범위");
+            return false;
+        }
+
+        var output = outputPath ?? Path.Combine(
+            Path.GetDirectoryName(inputPath) ?? "",
+            Path.GetFileNameWithoutExtension(inputPath) + $"_{startTime:mm\\.ss}-{endTime:mm\\.ss}" + Path.GetExtension(inputPath));
+
+        Log($"[FFmpeg] 구간 추출: {startTime:mm\\:ss} ~ {endTime:mm\\:ss}");
+
+        try
+        {
+            ProgressChanged?.Invoke(this, new AudioConversionProgressEventArgs
+            {
+                Status = $"구간 추출 중 ({startTime:mm\\:ss} ~ {endTime:mm\\:ss})...",
+                Progress = 0
+            });
+
+            var workDir = Path.GetDirectoryName(inputPath) ?? Environment.CurrentDirectory;
+            var inputFileName = SanitizeFFmpegPath(Path.GetFileName(inputPath));
+            var outputFileName = SanitizeFFmpegPath(Path.GetFileName(output));
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = ffmpeg,
+                Arguments = $"-i \"{inputFileName}\" -ss {startTime:hh\\:mm\\:ss\\.fff} -t {duration:hh\\:mm\\:ss\\.fff} -c copy -y \"{outputFileName}\"",
+                UseShellExecute = false,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = System.Text.Encoding.UTF8,
+                StandardErrorEncoding = System.Text.Encoding.UTF8,
+                WorkingDirectory = workDir
+            };
+
+            Log($"[FFmpeg] 명령어: {ffmpeg} {startInfo.Arguments}");
+
+            using var process = new Process { StartInfo = startInfo };
+            process.Start();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode == 0 && File.Exists(output))
+            {
+                Log($"[FFmpeg] 구간 추출 완료: {output}");
+
+                ConversionCompleted?.Invoke(this, new AudioConversionCompletedEventArgs
+                {
+                    Success = true,
+                    OutputPath = output
+                });
+                return true;
+            }
+
+            Log($"[FFmpeg] 구간 추출 실패: ExitCode={process.ExitCode}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log($"[FFmpeg] 구간 추출 오류: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// WAV 파일 헤더가 손상된 경우 복구
+    /// 대용량 파일(3GB+)에서 헤더가 손상되는 경우 FFmpeg가 읽지 못하는 문제 해결
+    /// </summary>
+    private void RepairWavHeaderIfNeeded(string filePath)
+    {
+        if (!File.Exists(filePath)) return;
+
+        using var fs = new FileStream(filePath, FileMode.Open, FileAccess.ReadWrite);
+        if (fs.Length < 44) return; // WAV 헤더 최소 크기
+
+        var header = new byte[44];
+        fs.Read(header, 0, 44);
+
+        // RIFF 마커 확인 (offset 0-3)
+        bool hasRiffMarker = header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F';
+
+        // WAVE 마커 확인 (offset 8-11)
+        bool hasWaveMarker = header[8] == 'W' && header[9] == 'A' && header[10] == 'V' && header[11] == 'E';
+
+        // fmt 청크 확인 (offset 12-15)
+        bool hasFmtChunk = header[12] == 'f' && header[13] == 'm' && header[14] == 't' && header[15] == ' ';
+
+        if (hasRiffMarker && hasWaveMarker && hasFmtChunk)
+        {
+            Log("[FFmpeg] WAV 헤더 정상");
+            return;
+        }
+
+        Log($"[FFmpeg] WAV 헤더 손상 감지 - RIFF:{hasRiffMarker}, WAVE:{hasWaveMarker}, fmt:{hasFmtChunk}");
+        Log($"[FFmpeg] 헤더 hex: {BitConverter.ToString(header, 0, 20)}");
+
+        fs.Close();
+
+        // 파일 복구
+        RepairWavFile(filePath);
+    }
+
+    /// <summary>
+    /// WAV 파일을 새로 생성하여 올바른 헤더와 함께 저장
+    /// </summary>
+    private void RepairWavFile(string filePath)
+    {
+        var tempPath = filePath + ".repair.tmp";
+        const int COPY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB 청크
+
+        Log($"[FFmpeg] WAV 파일 복구 시작: {filePath}");
+
+        try
+        {
+            using (var srcFs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, COPY_BUFFER_SIZE))
+            using (var dstFs = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, COPY_BUFFER_SIZE))
+            {
+                // 헤더 영역 분석
+                var headerArea = new byte[64];
+                srcFs.Read(headerArea, 0, Math.Min(64, (int)Math.Min(srcFs.Length, 64)));
+                srcFs.Seek(0, SeekOrigin.Begin);
+
+                long audioDataStart;
+
+                // offset 8-43 영역이 대부분 0인지 확인 (null 헤더 패턴)
+                int nullCount = 0;
+                for (int i = 8; i < 44 && i < headerArea.Length; i++)
+                {
+                    if (headerArea[i] == 0) nullCount++;
+                }
+
+                if (nullCount > 30)
+                {
+                    audioDataStart = 44;
+                    Log("[FFmpeg] 복구 패턴: null 헤더 (offset 44부터 데이터)");
+                }
+                else
+                {
+                    audioDataStart = 8;
+                    Log("[FFmpeg] 복구 패턴: 헤더 없음 (offset 8부터 데이터)");
+                }
+
+                long audioDataSize = srcFs.Length - audioDataStart;
+                Log($"[FFmpeg] 복구: 원본={srcFs.Length / (1024.0 * 1024.0):F1}MB, 오디오={audioDataSize / (1024.0 * 1024.0):F1}MB");
+
+                // 표준 WAV 헤더 작성 (48kHz, 16bit, Stereo 가정)
+                WriteWavHeader(dstFs, audioDataSize, 48000, 16, 2);
+
+                // 오디오 데이터 복사
+                srcFs.Seek(audioDataStart, SeekOrigin.Begin);
+                var buffer = new byte[COPY_BUFFER_SIZE];
+                long totalCopied = 0;
+                int bytesRead;
+
+                while ((bytesRead = srcFs.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    dstFs.Write(buffer, 0, bytesRead);
+                    totalCopied += bytesRead;
+
+                    if (totalCopied % (100 * 1024 * 1024) == 0) // 100MB마다 로그
+                    {
+                        Log($"[FFmpeg] 복구 진행: {totalCopied / (1024.0 * 1024.0):F0}MB / {audioDataSize / (1024.0 * 1024.0):F0}MB");
+                    }
+                }
+
+                dstFs.Flush();
+            }
+
+            // 원본 백업 후 복구 파일로 교체
+            var backupPath = filePath + ".damaged";
+            if (File.Exists(backupPath)) File.Delete(backupPath);
+            File.Move(filePath, backupPath);
+            File.Move(tempPath, filePath);
+
+            Log($"[FFmpeg] WAV 파일 복구 완료 (손상된 원본: {backupPath})");
+        }
+        catch (Exception ex)
+        {
+            Log($"[FFmpeg] WAV 파일 복구 실패: {ex.Message}");
+            if (File.Exists(tempPath)) File.Delete(tempPath);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// WAV 헤더 작성 (44바이트 표준 PCM 헤더)
+    /// </summary>
+    private void WriteWavHeader(FileStream fs, long dataSize, int sampleRate, int bitsPerSample, int channels)
+    {
+        var blockAlign = channels * bitsPerSample / 8;
+        var byteRate = sampleRate * blockAlign;
+
+        // WAV 파일 최대 크기 제한 (4GB - 8)
+        var maxSize = uint.MaxValue - 8;
+        var fileSizeField = (uint)Math.Min(dataSize + 36, maxSize);
+        var dataSizeField = (uint)Math.Min(dataSize, maxSize);
+
+        using var bw = new BinaryWriter(fs, System.Text.Encoding.UTF8, leaveOpen: true);
+
+        // RIFF 청크
+        bw.Write(new char[] { 'R', 'I', 'F', 'F' });
+        bw.Write(fileSizeField);
+        bw.Write(new char[] { 'W', 'A', 'V', 'E' });
+
+        // fmt 청크
+        bw.Write(new char[] { 'f', 'm', 't', ' ' });
+        bw.Write(16); // fmt 청크 크기
+        bw.Write((short)1); // PCM 포맷
+        bw.Write((short)channels);
+        bw.Write(sampleRate);
+        bw.Write(byteRate);
+        bw.Write((short)blockAlign);
+        bw.Write((short)bitsPerSample);
+
+        // data 청크
+        bw.Write(new char[] { 'd', 'a', 't', 'a' });
+        bw.Write(dataSizeField);
     }
 }
 

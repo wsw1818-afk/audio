@@ -145,4 +145,31 @@ public class ScreenRecordingOptions
     /// 예약 녹화 종료 시간 (null이면 수동 종료)
     /// </summary>
     public DateTime? ScheduledEndTime { get; set; } = null;
+
+    // ========== 4단계: DRM 캡처 옵션 ==========
+
+    /// <summary>
+    /// Chrome DRM 캡처 모드 사용 여부
+    /// </summary>
+    public bool UseChromeDrmCapture { get; set; } = false;
+
+    /// <summary>
+    /// Chrome 디버그 포트 (기본 9222)
+    /// </summary>
+    public int ChromeDebugPort { get; set; } = 9222;
+
+    /// <summary>
+    /// Chrome 자동 실행 여부
+    /// </summary>
+    public bool AutoLaunchChrome { get; set; } = true;
+
+    /// <summary>
+    /// 캡처할 Chrome URL (null이면 현재 탭)
+    /// </summary>
+    public string? ChromeTargetUrl { get; set; } = null;
+
+    /// <summary>
+    /// 향상된 DXGI 캡처 사용 (DRM 우회 모드)
+    /// </summary>
+    public bool UseEnhancedDxgi { get; set; } = false;
 }

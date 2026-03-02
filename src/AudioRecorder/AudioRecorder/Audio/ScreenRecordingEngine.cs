@@ -10,13 +10,15 @@ namespace AudioRecorder.Audio;
 
 /// <summary>
 /// 화면 녹화 엔진 - 화면 캡처 + 오디오 녹음 + 인코딩 통합
-/// DXGI 우선 사용, 실패 시 GDI로 자동 fallback
+/// Chrome DRM 캡처 → Enhanced DXGI → DXGI → GDI 순으로 자동 fallback
 /// </summary>
 public class ScreenRecordingEngine : IDisposable
 {
     private readonly DeviceManager _deviceManager;
     private readonly ScreenCaptureService _gdiCapture;
     private readonly DxgiScreenCaptureService _dxgiCapture;
+    private readonly EnhancedDxgiCaptureService _enhancedDxgiCapture;
+    private readonly ChromeDrmCaptureService _chromeDrmCapture;
     private readonly VideoEncoderService _videoEncoder;
     private readonly MouseClickHighlightService _mouseClickHighlight;
     private readonly RecordingBorderService _recordingBorder;
@@ -24,8 +26,8 @@ public class ScreenRecordingEngine : IDisposable
     private readonly WebcamOverlayService _webcamOverlay;
 
     // 현재 사용 중인 캡처 방식
-    private bool _useDxgi = true;
-    private bool _dxgiInitialized = false;
+    private enum CaptureMode { None, GDI, DXGI, EnhancedDXGI, ChromeDRM }
+    private CaptureMode _captureMode = CaptureMode.None;
 
     // 오디오 캡처
     private WasapiCapture? _micCapture;
@@ -47,7 +49,7 @@ public class ScreenRecordingEngine : IDisposable
     private volatile bool _isRecording;
     private volatile bool _isPaused;
 
-    // 내부 포맷 (32-bit float, 48kHz, Stereo)
+    // 남부 포맷 (32-bit float, 48kHz, Stereo)
     private readonly WaveFormat _internalFormat = WaveFormat.CreateIeeeFloatWaveFormat(48000, 2);
     // 출력 포맷 (16-bit PCM, 48kHz, Stereo)
     private readonly WaveFormat _outputFormat = new(48000, 16, 2);
@@ -59,14 +61,14 @@ public class ScreenRecordingEngine : IDisposable
     private readonly AutoResetEvent _audioDataEvent = new(false);
     private readonly object _writeLock = new();
 
-    // 레벨 업데이트 쓰로틀링 (Environment.TickCount64 사용 - DateTime.Now보다 빠름)
+    // 레벨 업데이트 쓰로틀링
     private long _lastLevelUpdateTick;
     private const int LEVEL_UPDATE_INTERVAL_MS = 50;
 
     // 단독 오디오 녹음용 재사용 버퍼
     private byte[]? _soloAudioOutputBuffer;
 
-    // 프레임 버퍼 풀링 (메모리 재사용)
+    // 프레임 버퍼 풀링
     private byte[]? _frameBuffer;
     private int _frameBufferSize;
 
@@ -83,12 +85,24 @@ public class ScreenRecordingEngine : IDisposable
     /// <summary>
     /// 캡처된 프레임 수
     /// </summary>
-    public long FrameCount => _useDxgi ? _dxgiCapture.FrameCount : _gdiCapture.FrameCount;
+    public long FrameCount => _captureMode switch
+    {
+        CaptureMode.ChromeDRM => _chromeDrmCapture.FrameCount,
+        CaptureMode.EnhancedDXGI => _enhancedDxgiCapture.FrameCount,
+        CaptureMode.DXGI => _dxgiCapture.FrameCount,
+        _ => _gdiCapture.FrameCount
+    };
 
     /// <summary>
     /// 현재 캡처 방식
     /// </summary>
-    public string CaptureMethod => _useDxgi ? "DXGI" : "GDI";
+    public string CaptureMethod => _captureMode switch
+    {
+        CaptureMode.ChromeDRM => "Chrome DRM",
+        CaptureMode.EnhancedDXGI => "Enhanced DXGI",
+        CaptureMode.DXGI => "DXGI",
+        _ => "GDI"
+    };
 
     /// <summary>
     /// 현재 FPS
@@ -107,6 +121,11 @@ public class ScreenRecordingEngine : IDisposable
     /// </summary>
     public bool IsFFmpegAvailable => _videoEncoder.IsFFmpegAvailable;
 
+    /// <summary>
+    /// Chrome DRM 캡처 서비스 (외부에서 접근용)
+    /// </summary>
+    public ChromeDrmCaptureService ChromeDrmCapture => _chromeDrmCapture;
+
     // 이벤트
     public event EventHandler<LevelEventArgs>? LevelUpdated;
     public event EventHandler<RecordingStateChangedEventArgs>? StateChanged;
@@ -118,17 +137,24 @@ public class ScreenRecordingEngine : IDisposable
         _deviceManager = deviceManager;
         _gdiCapture = new ScreenCaptureService();
         _dxgiCapture = new DxgiScreenCaptureService();
+        _enhancedDxgiCapture = new EnhancedDxgiCaptureService();
+        _chromeDrmCapture = new ChromeDrmCaptureService();
         _videoEncoder = new VideoEncoderService();
         _mouseClickHighlight = new MouseClickHighlightService();
         _recordingBorder = new RecordingBorderService();
         _watermark = new WatermarkService();
         _webcamOverlay = new WebcamOverlayService();
 
-        // 두 캡처 서비스 모두 이벤트 연결
+        // 캡처 서비스 이벤트 연결
         _gdiCapture.FrameAvailable += OnFrameAvailable;
         _gdiCapture.ErrorOccurred += OnCaptureError;
         _dxgiCapture.FrameAvailable += OnFrameAvailable;
         _dxgiCapture.ErrorOccurred += OnDxgiCaptureError;
+        _enhancedDxgiCapture.FrameAvailable += OnEnhancedFrameAvailable;
+        _enhancedDxgiCapture.ErrorOccurred += OnEnhancedCaptureError;
+        _enhancedDxgiCapture.DrmDetected += OnDrmDetected;
+        _chromeDrmCapture.FrameAvailable += OnChromeFrameAvailable;
+        _chromeDrmCapture.ErrorOccurred += OnChromeCaptureError;
         _videoEncoder.EncodingCompleted += OnEncodingCompleted;
     }
 
@@ -141,7 +167,7 @@ public class ScreenRecordingEngine : IDisposable
             throw new InvalidOperationException("이미 녹화 중이거나 정지 작업이 진행 중입니다.");
 
         if (!_videoEncoder.IsFFmpegAvailable)
-            throw new InvalidOperationException("FFmpeg를 찾을 수 없습니다. ffmpeg.exe를 앱 폴더에 복사하세요.");
+            throw new InvalidOperationException("FFmpeg를 찾을 수 없습니다. ffmpeg.exe를 앱 폴터에 복사하세요.");
 
         _options = options;
 
@@ -190,25 +216,33 @@ public class ScreenRecordingEngine : IDisposable
             _webcamOverlay.Position = options.WebcamPosition;
             _webcamOverlay.Size = options.WebcamSize;
 
-            // 화면 캡처 시작 - DXGI 우선, 실패 시 GDI fallback
+            // 화면 캡처 시작 - Chrome DRM → Enhanced DXGI → DXGI → GDI 순으로 시도
             int frameWidth, frameHeight;
-            if (TryStartDxgiCapture(options, out frameWidth, out frameHeight))
+            if (options.UseChromeDrmCapture && TryStartChromeDrmCapture(options, out frameWidth, out frameHeight))
             {
-                _useDxgi = true;
-                _dxgiInitialized = true;
+                _captureMode = CaptureMode.ChromeDRM;
+                Debug.WriteLine("[ScreenRecording] Chrome DRM 캡처 모드로 시작");
+            }
+            else if (options.UseEnhancedDxgi && TryStartEnhancedDxgiCapture(options, out frameWidth, out frameHeight))
+            {
+                _captureMode = CaptureMode.EnhancedDXGI;
+                Debug.WriteLine("[ScreenRecording] Enhanced DXGI 캡처 모드로 시작");
+            }
+            else if (TryStartDxgiCapture(options, out frameWidth, out frameHeight))
+            {
+                _captureMode = CaptureMode.DXGI;
                 Debug.WriteLine("[ScreenRecording] DXGI 캡처 모드로 시작");
             }
             else
             {
-                _useDxgi = false;
-                _dxgiInitialized = false;
+                _captureMode = CaptureMode.GDI;
                 _gdiCapture.Start(options.Region, options.FrameRate, options.ShowMouseCursor);
                 frameWidth = _gdiCapture.FrameWidth;
                 frameHeight = _gdiCapture.FrameHeight;
                 Debug.WriteLine("[ScreenRecording] GDI 캡처 모드로 fallback");
             }
 
-            // 비디오 인코더 시작 (캡처 시작 후 크기 정보로)
+            // 비디오 인코더 시작
             _videoEncoder.StartEncoding(
                 _videoPath,
                 frameWidth,
@@ -226,9 +260,8 @@ public class ScreenRecordingEngine : IDisposable
 
             // 녹화 영역 테두리 표시
             Debug.WriteLine($"[ScreenRecording] 테두리 설정 - IsEnabled: {_recordingBorder.IsEnabled}, RegionType: {options.Region.Type}");
-            if (_recordingBorder.IsEnabled)
+            if (_recordingBorder.IsEnabled && _captureMode != CaptureMode.ChromeDRM)
             {
-                // 전체 화면일 경우 화면 크기로 Bounds 계산
                 var borderBounds = options.Region.Type == CaptureRegionType.FullScreen
                     ? GetScreenBounds(options.Region.MonitorIndex)
                     : options.Region.Bounds;
@@ -239,10 +272,6 @@ public class ScreenRecordingEngine : IDisposable
                 {
                     _recordingBorder.Show(borderBounds);
                     Debug.WriteLine("[ScreenRecording] 테두리 Show() 호출됨");
-                }
-                else
-                {
-                    Debug.WriteLine("[ScreenRecording] 테두리 영역이 0이라 표시 안 함");
                 }
             }
 
@@ -258,6 +287,7 @@ public class ScreenRecordingEngine : IDisposable
         }
         catch (Exception ex)
         {
+            _captureMode = CaptureMode.None;
             Cleanup();
             OnError($"녹화 시작 실패: {ex.Message}");
             throw;
@@ -269,19 +299,21 @@ public class ScreenRecordingEngine : IDisposable
 
     // 인코딩 진행 중 플래그
     private volatile bool _isEncoding;
+    private CancellationTokenSource? _encodingCts;
+    private Task? _encodingTask;
 
     /// <summary>
     /// 인코딩 진행 중 여부
     /// </summary>
-    public bool IsEncoding => _isEncoding;
+    public bool IsEncoding => _isEncoding || (_encodingTask?.IsCompleted == false);
 
     /// <summary>
-    /// 녹화 중지 - 캡처만 즉시 정지하고 인코딩은 백그라운드에서 진행
+    /// 녹화 중지
     /// </summary>
-    public Task StopAsync()
+    public async Task StopAsync()
     {
         if (State == RecordingState.Stopped || _isStopping)
-            return Task.CompletedTask;
+            return;
 
         Debug.WriteLine("[ScreenRecording] StopAsync 시작");
         _isStopping = true;
@@ -295,10 +327,7 @@ public class ScreenRecordingEngine : IDisposable
         try
         {
             Debug.WriteLine($"[ScreenRecording] 화면 캡처 중지... (모드: {CaptureMethod})");
-            if (_useDxgi)
-                _dxgiCapture.Stop();
-            else
-                _gdiCapture.Stop();
+            await StopCaptureAsync();
 
             Debug.WriteLine("[ScreenRecording] 오디오 캡처 중지...");
             StopAudioCapture();
@@ -311,7 +340,7 @@ public class ScreenRecordingEngine : IDisposable
             var recordedDuration = _stopwatch.Elapsed;
             var recordedFrameCount = FrameCount;
 
-            // 캡처 정지 완료 - 즉시 상태 변경하여 UI 활성화
+            // 캡처 정지 완료
             Debug.WriteLine("[ScreenRecording] 캡처 정지 완료, 상태를 Stopped로 변경");
             Cleanup();
             State = RecordingState.Stopped;
@@ -319,25 +348,22 @@ public class ScreenRecordingEngine : IDisposable
             OnStateChanged();
 
             // 인코딩은 백그라운드에서 진행
-            Debug.WriteLine($"[ScreenRecording] 백그라운드 태스크 시작 준비 - duration: {recordedDuration}, frames: {recordedFrameCount}");
-            Debug.WriteLine($"[ScreenRecording] _videoPath: {_videoPath}, _audioPath: {_audioPath}, _finalOutputPath: {_finalOutputPath}");
-
-            // 로컬 변수로 복사 (클로저 문제 방지)
-            var videoPath = _videoPath;
-            var audioPath = _audioPath;
-            var finalOutputPath = _finalOutputPath;
-
             _isEncoding = true;
-            _ = Task.Run(async () =>
+            _encodingCts = new CancellationTokenSource();
+            _encodingTask = Task.Run(async () =>
             {
                 Debug.WriteLine("[ScreenRecording] 백그라운드 태스크 실행 시작!");
                 try
                 {
-                    await EncodeAndMuxAsync(recordedDuration, recordedFrameCount);
+                    await EncodeAndMuxAsync(recordedDuration, recordedFrameCount, _encodingCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    Debug.WriteLine("[ScreenRecording] 인코딩이 취소되었습니다.");
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine($"[ScreenRecording] 백그라운드 인코딩 예외: {ex.Message}\n{ex.StackTrace}");
+                    Debug.WriteLine($"[ScreenRecording] 백그라운드 인코딩 예외: {ex.Message}");
                     OnError($"인코딩 실패: {ex.Message}");
                     RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
                     {
@@ -348,6 +374,8 @@ public class ScreenRecordingEngine : IDisposable
                 finally
                 {
                     _isEncoding = false;
+                    _encodingCts?.Dispose();
+                    _encodingCts = null;
                     Debug.WriteLine("[ScreenRecording] 백그라운드 태스크 종료");
                 }
             });
@@ -368,16 +396,29 @@ public class ScreenRecordingEngine : IDisposable
                 ErrorMessage = ex.Message
             });
         }
-
-        return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// 백그라운드에서 인코딩 및 합성 수행
-    /// </summary>
-    private async Task EncodeAndMuxAsync(TimeSpan recordedDuration, long recordedFrameCount)
+    private async Task StopCaptureAsync()
     {
-        // 디버그 로그 파일 - 명시적 경로 사용
+        switch (_captureMode)
+        {
+            case CaptureMode.ChromeDRM:
+                await _chromeDrmCapture.StopCaptureAsync();
+                break;
+            case CaptureMode.EnhancedDXGI:
+                _enhancedDxgiCapture.Stop();
+                break;
+            case CaptureMode.DXGI:
+                _dxgiCapture.Stop();
+                break;
+            case CaptureMode.GDI:
+                _gdiCapture.Stop();
+                break;
+        }
+    }
+
+    private async Task EncodeAndMuxAsync(TimeSpan recordedDuration, long recordedFrameCount, CancellationToken ct = default)
+    {
         var logDir = Path.GetDirectoryName(_finalOutputPath);
         if (string.IsNullOrEmpty(logDir))
         {
@@ -388,10 +429,10 @@ public class ScreenRecordingEngine : IDisposable
         void Log(string msg)
         {
             Debug.WriteLine($"[ScreenRecording] {msg}");
-            try { File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); } catch (Exception ex) { Debug.WriteLine($"Log write error: {ex.Message}"); }
+            try { File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); } catch { }
         }
 
-        Log($"=== 백그라운드 인코딩 시작 === (finalOutputPath: {_finalOutputPath})");
+        Log($"=== 백그라운드 인코딩 시작 ===");
 
         try
         {
@@ -399,11 +440,8 @@ public class ScreenRecordingEngine : IDisposable
             await _videoEncoder.StopEncodingAsync();
             Log("비디오 인코더 중지 완료");
 
-            // VideoEncoderService가 실제로 출력한 경로 사용
             var actualVideoPath = _videoEncoder.OutputPath;
             Log($"actualVideoPath: {actualVideoPath}, exists: {File.Exists(actualVideoPath)}");
-            Log($"_videoPath: {_videoPath}, exists: {File.Exists(_videoPath)}");
-            Log($"_audioPath: {_audioPath}, exists: {File.Exists(_audioPath)}");
 
             var videoFileToUse = File.Exists(actualVideoPath) ? actualVideoPath :
                                  File.Exists(_videoPath) ? _videoPath : null;
@@ -412,22 +450,19 @@ public class ScreenRecordingEngine : IDisposable
 
             if (videoFileToUse != null && File.Exists(_audioPath))
             {
-                // 합성 전에 임시 출력 파일 경로 생성
                 var tempMuxOutput = Path.Combine(Path.GetDirectoryName(_finalOutputPath) ?? "",
                     $"mux_temp_{DateTime.Now:yyyyMMdd_HHmmss}.mp4");
 
-                Log($"tempMuxOutput: {tempMuxOutput}");
-                Log($"오디오/비디오 합성 시작... (audio bitrate: {_options.AudioBitrate}kbps)");
+                Log($"오디오/비디오 합성 시작...");
                 var muxSuccess = await _videoEncoder.MuxAudioVideoAsync(videoFileToUse, _audioPath, tempMuxOutput, _options.AudioBitrate);
-                Log($"합성 결과: {muxSuccess}, tempMuxOutput exists: {File.Exists(tempMuxOutput)}");
+                Log($"합성 결과: {muxSuccess}");
 
                 if (muxSuccess && File.Exists(tempMuxOutput))
                 {
-                    Log("합성 성공! 임시 파일 정리 중...");
+                    Log("합성 성공! 파일 정리 중...");
                     try { File.Delete(videoFileToUse); } catch { }
                     try { File.Delete(_audioPath); } catch { }
 
-                    // 임시 합성 파일을 최종 경로로 이동
                     File.Move(tempMuxOutput, _finalOutputPath, true);
                     Log($"완료: {_finalOutputPath}");
 
@@ -443,6 +478,7 @@ public class ScreenRecordingEngine : IDisposable
                 {
                     Log("합성 실패! 비디오만 저장...");
                     try { File.Delete(tempMuxOutput); } catch { }
+                    try { File.Delete(_audioPath); } catch { }
                     if (videoFileToUse != _finalOutputPath)
                     {
                         File.Move(videoFileToUse, _finalOutputPath, true);
@@ -486,13 +522,19 @@ public class ScreenRecordingEngine : IDisposable
         }
         catch (Exception ex)
         {
-            Log($"예외 발생: {ex.Message}\n{ex.StackTrace}");
+            Log($"예외 발생: {ex.Message}");
             OnError($"인코딩 실패: {ex.Message}");
             RecordingCompleted?.Invoke(this, new ScreenRecordingCompletedEventArgs
             {
                 Success = false,
                 ErrorMessage = ex.Message
             });
+        }
+        finally
+        {
+            // 임시 파일 정리 (성공/실패 모두)
+            try { if (File.Exists(_audioPath)) File.Delete(_audioPath); } catch { }
+            try { if (File.Exists(_videoPath)) File.Delete(_videoPath); } catch { }
         }
 
         Log("=== 백그라운드 인코딩 완료 ===");
@@ -530,22 +572,18 @@ public class ScreenRecordingEngine : IDisposable
 
     private void StartAudioRecording(ScreenRecordingOptions options)
     {
-        // 오디오 파일 라이터 생성
         _audioWriter = new WaveFileWriter(_audioPath, _outputFormat);
 
-        // 마이크 캡처
         if (options.IncludeMicrophone)
         {
             InitializeMicCapture(options.MicrophoneDeviceId);
         }
 
-        // 시스템 오디오 캡처
         if (options.IncludeSystemAudio)
         {
             InitializeLoopbackCapture(options.OutputDeviceId);
         }
 
-        // 믹싱 스레드 시작 (동시 녹음 시)
         if (options.IncludeMicrophone && options.IncludeSystemAudio)
         {
             _audioMixingThread = new Thread(AudioMixingLoop)
@@ -556,7 +594,6 @@ public class ScreenRecordingEngine : IDisposable
             _audioMixingThread.Start();
         }
 
-        // 캡처 시작
         _micCapture?.StartRecording();
         _loopbackCapture?.StartRecording();
     }
@@ -613,8 +650,6 @@ public class ScreenRecordingEngine : IDisposable
         }
 
         _loopbackCapture = new WasapiLoopbackCapture(device);
-
-        // 무음 재생으로 Loopback 활성화
         StartSilencePlayback(device);
 
         _loopbackCapture.DataAvailable += OnLoopbackDataAvailable;
@@ -640,13 +675,11 @@ public class ScreenRecordingEngine : IDisposable
     {
         if (e.BytesRecorded == 0 || !_isRecording) return;
 
-        // 레벨 미터 업데이트
         _micLevelMeter.ProcessSamples(e.Buffer, e.BytesRecorded);
         ThrottledLevelUpdate();
 
         if (_isPaused) return;
 
-        // 동시 녹음 모드
         if (_options.IncludeSystemAudio)
         {
             _micBuffer.WriteFromBytes(e.Buffer, e.BytesRecorded);
@@ -654,7 +687,6 @@ public class ScreenRecordingEngine : IDisposable
         }
         else
         {
-            // 마이크 단독 녹음
             WriteAudioToFile(e.Buffer, e.BytesRecorded, _options.MicrophoneVolume);
         }
     }
@@ -663,13 +695,11 @@ public class ScreenRecordingEngine : IDisposable
     {
         if (e.BytesRecorded == 0 || !_isRecording) return;
 
-        // 레벨 미터 업데이트
         _systemLevelMeter.ProcessSamples(e.Buffer, e.BytesRecorded);
         ThrottledLevelUpdate();
 
         if (_isPaused) return;
 
-        // 동시 녹음 모드
         if (_options.IncludeMicrophone)
         {
             _systemBuffer.WriteFromBytes(e.Buffer, e.BytesRecorded);
@@ -677,14 +707,13 @@ public class ScreenRecordingEngine : IDisposable
         }
         else
         {
-            // 시스템 오디오 단독 녹음
             WriteAudioToFile(e.Buffer, e.BytesRecorded, _options.SystemVolume);
         }
     }
 
     private void AudioMixingLoop()
     {
-        const int CHUNK_SIZE = 1920; // 20ms at 48kHz stereo
+        const int CHUNK_SIZE = 1920;
         var micData = new float[CHUNK_SIZE];
         var sysData = new float[CHUNK_SIZE];
         var mixBuffer = new float[CHUNK_SIZE];
@@ -715,7 +744,6 @@ public class ScreenRecordingEngine : IDisposable
                     mixBuffer[i] = Math.Clamp(mixed, -1.0f, 1.0f);
                 }
 
-                // 16-bit PCM 변환 및 파일 쓰기
                 var shortSpan = MemoryMarshal.Cast<byte, short>(outputBuffer.AsSpan(0, samplesToMix * 2));
                 for (int i = 0; i < samplesToMix; i++)
                 {
@@ -741,7 +769,6 @@ public class ScreenRecordingEngine : IDisposable
         int sampleCount = bytesRecorded / 4;
         int outputSize = sampleCount * 2;
 
-        // 버퍼 재사용 (GC 압력 최소화)
         if (_soloAudioOutputBuffer == null || _soloAudioOutputBuffer.Length < outputSize)
         {
             _soloAudioOutputBuffer = new byte[outputSize];
@@ -812,84 +839,113 @@ public class ScreenRecordingEngine : IDisposable
 
     private void OnFrameAvailable(object? sender, FrameEventArgs e)
     {
-        _receivedFrameCount++;
-        if (_receivedFrameCount % 30 == 0)
+        if (_captureMode == CaptureMode.DXGI)
         {
-            Debug.WriteLine($"[ScreenRecording] 프레임 수신: {_receivedFrameCount}, isRecording: {_isRecording}, isPaused: {_isPaused}, 모드: {CaptureMethod}");
+            // DXGI: CopyCurrentFrameTo로 _frameBuffer에 직접 복사 (이중 복사 제거)
+            ProcessFrameDirectCopy(e.Width, e.Height, buffer => _dxgiCapture.CopyCurrentFrameTo(buffer));
+        }
+        else
+        {
+            // GDI: GetCurrentFrameCopy 사용 (GDI는 CopyCurrentFrameTo 미지원)
+            ProcessFrame(e.Width, e.Height, () => _gdiCapture.GetCurrentFrameCopy());
+        }
+    }
+
+    private void OnEnhancedFrameAvailable(object? sender, FrameEventArgs e)
+    {
+        ProcessFrame(e.Width, e.Height, () => _enhancedDxgiCapture.GetCurrentFrameCopy());
+    }
+
+    private void OnChromeFrameAvailable(object? sender, ChromeFrameEventArgs e)
+    {
+        // Chrome은 이벤트 인자로 복사본이 전달됨
+        ProcessFrame(e.Width, e.Height, () => e.FrameData);
+    }
+
+    /// <summary>
+    /// 프레임 처리 - 직접 복사 경로 (DXGI 전용)
+    /// CopyCurrentFrameTo를 사용하여 사전 할당된 _frameBuffer에 한 번만 복사.
+    /// GetCurrentFrameCopy()의 new byte[] 할당 + 추가 BlockCopy를 제거하여 GC 압력 감소.
+    /// </summary>
+    private void ProcessFrameDirectCopy(int frameWidth, int frameHeight, Func<byte[], bool> copyFrameTo)
+    {
+        var frameNumber = Interlocked.Increment(ref _receivedFrameCount);
+        if (frameNumber % 30 == 0)
+        {
+            Debug.WriteLine($"[ScreenRecording] 프레임 수신: {frameNumber}, isRecording: {_isRecording}, isPaused: {_isPaused}, 모드: {CaptureMethod}");
         }
 
         if (!_isRecording || _isPaused) return;
 
-        // 마우스 클릭 상태 업데이트
         _mouseClickHighlight.Update();
 
-        // 프레임 크기 정보
-        var frameWidth = _useDxgi ? _dxgiCapture.FrameWidth : _gdiCapture.FrameWidth;
-        var frameHeight = _useDxgi ? _dxgiCapture.FrameHeight : _gdiCapture.FrameHeight;
-
-        // 효과 적용 필요 여부 확인
-        bool needsEffects = _mouseClickHighlight.IsEnabled || _webcamOverlay.IsEnabled || _watermark.IsEnabled;
-
-        if (needsEffects)
+        var requiredSize = frameWidth * frameHeight * 4;
+        if (_frameBuffer == null || _frameBufferSize < requiredSize)
         {
-            // 효과 적용 시: 버퍼에 복사 후 수정
-            var requiredSize = frameWidth * frameHeight * 4; // BGRA
-            if (_frameBuffer == null || _frameBufferSize < requiredSize)
-            {
-                _frameBuffer = new byte[requiredSize];
-                _frameBufferSize = requiredSize;
-                Debug.WriteLine($"[ScreenRecording] 프레임 버퍼 재할당: {requiredSize} bytes");
-            }
-
-            // 캡처 서비스에서 버퍼로 직접 복사
-            bool copied = _useDxgi
-                ? _dxgiCapture.CopyCurrentFrameTo(_frameBuffer)
-                : _gdiCapture.CopyCurrentFrameTo(_frameBuffer);
-
-            if (!copied)
-            {
-                Debug.WriteLine($"[ScreenRecording] 프레임 복사 실패!");
-                return;
-            }
-
-            // 마우스 클릭 강조 효과 적용
-            if (_mouseClickHighlight.IsEnabled)
-            {
-                _mouseClickHighlight.DrawEffects(
-                    _frameBuffer,
-                    frameWidth,
-                    frameHeight,
-                    _options.Region.Bounds.X,
-                    _options.Region.Bounds.Y);
-            }
-
-            // 웹캠 오버레이 적용
-            if (_webcamOverlay.IsEnabled)
-            {
-                _webcamOverlay.DrawOverlay(_frameBuffer, frameWidth, frameHeight);
-            }
-
-            // 워터마크 적용
-            if (_watermark.IsEnabled)
-            {
-                _watermark.DrawWatermark(_frameBuffer, frameWidth, frameHeight);
-            }
-
-            _videoEncoder.WriteFrame(_frameBuffer);
+            _frameBuffer = new byte[requiredSize];
+            _frameBufferSize = requiredSize;
         }
-        else
+
+        // 사전 할당된 버퍼에 직접 복사 (단일 복사, new byte[] 할당 없음)
+        if (!copyFrameTo(_frameBuffer)) return;
+
+        ApplyEffectsAndEncode(frameWidth, frameHeight);
+    }
+
+    /// <summary>
+    /// 프레임 처리 - 복사본 경로 (GDI, Enhanced DXGI, Chrome 등)
+    /// getFrameData()가 반환한 복사본을 _frameBuffer에 BlockCopy.
+    /// </summary>
+    private void ProcessFrame(int frameWidth, int frameHeight, Func<byte[]?> getFrameData)
+    {
+        var frameNumber = Interlocked.Increment(ref _receivedFrameCount);
+        if (frameNumber % 30 == 0)
         {
-            // 효과 없음: 직접 전달 (zero-copy)
-            var frameData = _useDxgi ? _dxgiCapture.GetCurrentFrame() : _gdiCapture.GetCurrentFrame();
-            if (frameData != null)
-            {
-                _videoEncoder.WriteFrame(frameData);
-            }
-            else
-            {
-                Debug.WriteLine($"[ScreenRecording] 프레임 데이터가 null입니다!");
-            }
+            Debug.WriteLine($"[ScreenRecording] 프레임 수신: {frameNumber}, isRecording: {_isRecording}, isPaused: {_isPaused}, 모드: {CaptureMethod}");
         }
+
+        if (!_isRecording || _isPaused) return;
+
+        _mouseClickHighlight.Update();
+
+        var requiredSize = frameWidth * frameHeight * 4;
+        if (_frameBuffer == null || _frameBufferSize < requiredSize)
+        {
+            _frameBuffer = new byte[requiredSize];
+            _frameBufferSize = requiredSize;
+        }
+
+        byte[]? frameData = getFrameData();
+        if (frameData == null) return;
+
+        int copySize = Math.Min(frameData.Length, requiredSize);
+        Buffer.BlockCopy(frameData, 0, _frameBuffer, 0, copySize);
+
+        ApplyEffectsAndEncode(frameWidth, frameHeight);
+    }
+
+    /// <summary>
+    /// 효과 적용 + 인코더 전달 (공통 로직)
+    /// </summary>
+    private void ApplyEffectsAndEncode(int frameWidth, int frameHeight)
+    {
+        if (_mouseClickHighlight.IsEnabled)
+        {
+            _mouseClickHighlight.DrawEffects(_frameBuffer!, frameWidth, frameHeight,
+                _options.Region.Bounds.X, _options.Region.Bounds.Y);
+        }
+
+        if (_webcamOverlay.IsEnabled)
+        {
+            _webcamOverlay.DrawOverlay(_frameBuffer!, frameWidth, frameHeight);
+        }
+
+        if (_watermark.IsEnabled)
+        {
+            _watermark.DrawWatermark(_frameBuffer!, frameWidth, frameHeight);
+        }
+
+        _videoEncoder.WriteFrame(_frameBuffer!);
     }
 
     private void OnCaptureError(object? sender, CaptureErrorEventArgs e)
@@ -900,12 +956,34 @@ public class ScreenRecordingEngine : IDisposable
     private void OnDxgiCaptureError(object? sender, CaptureErrorEventArgs e)
     {
         Debug.WriteLine($"[ScreenRecording] DXGI 캡처 오류: {e.Message}");
-        // DXGI 오류 발생 시 GDI로 자동 전환은 녹화 시작 시에만 수행
-        // 녹화 중 오류는 일반 오류로 처리
         if (_isRecording)
         {
             OnError($"DXGI 캡처 오류: {e.Message}");
         }
+    }
+
+    private void OnEnhancedCaptureError(object? sender, CaptureErrorEventArgs e)
+    {
+        Debug.WriteLine($"[ScreenRecording] Enhanced DXGI 오류: {e.Message}");
+        if (_isRecording)
+        {
+            OnError($"Enhanced DXGI 오류: {e.Message}");
+        }
+    }
+
+    private void OnChromeCaptureError(object? sender, ChromeCaptureErrorEventArgs e)
+    {
+        Debug.WriteLine($"[ScreenRecording] Chrome DRM 오류: {e.Message}");
+        if (_isRecording)
+        {
+            OnError($"Chrome DRM 오류: {e.Message}");
+        }
+    }
+
+    private void OnDrmDetected(object? sender, DrmDetectedEventArgs e)
+    {
+        Debug.WriteLine($"[ScreenRecording] DRM 감지됨: {e.Message}");
+        OnError($"DRM 감지: {e.Message}");
     }
 
     private void OnEncodingCompleted(object? sender, EncodingCompletedEventArgs e)
@@ -920,9 +998,6 @@ public class ScreenRecordingEngine : IDisposable
 
     #region 헬퍼 메서드
 
-    /// <summary>
-    /// 지정된 모니터 인덱스의 화면 영역을 반환
-    /// </summary>
     private static System.Drawing.Rectangle GetScreenBounds(int monitorIndex)
     {
         var screens = System.Windows.Forms.Screen.AllScreens;
@@ -930,14 +1005,76 @@ public class ScreenRecordingEngine : IDisposable
         {
             return screens[monitorIndex].Bounds;
         }
-        // 기본값: 주 모니터
         return System.Windows.Forms.Screen.PrimaryScreen?.Bounds
             ?? new System.Drawing.Rectangle(0, 0, 1920, 1080);
     }
 
-    /// <summary>
-    /// DXGI 캡처 시작 시도
-    /// </summary>
+    private bool TryStartChromeDrmCapture(ScreenRecordingOptions options, out int frameWidth, out int frameHeight)
+    {
+        frameWidth = 0;
+        frameHeight = 0;
+
+        try
+        {
+            // Task.Run으로 래핑하여 SynchronizationContext 데드락 방지
+            var result = Task.Run(async () => await _chromeDrmCapture.StartCaptureAsync(
+                options.FrameRate,
+                options.ChromeDebugPort,
+                options.ChromeTargetUrl));
+
+            if (result.Wait(TimeSpan.FromSeconds(30)))
+            {
+                if (result.Result)
+                {
+                    frameWidth = _chromeDrmCapture.FrameWidth;
+                    frameHeight = _chromeDrmCapture.FrameHeight;
+                    return true;
+                }
+            }
+            else
+            {
+                Debug.WriteLine("[ScreenRecording] Chrome DRM 캡처 시작 시간 초과");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[ScreenRecording] Chrome DRM 캡처 시작 실패: {ex.Message}");
+        }
+
+        return false;
+    }
+
+    private bool TryStartEnhancedDxgiCapture(ScreenRecordingOptions options, out int frameWidth, out int frameHeight)
+    {
+        frameWidth = 0;
+        frameHeight = 0;
+
+        try
+        {
+            _enhancedDxgiCapture.DrmBypassMode = true;
+            _enhancedDxgiCapture.Start(options.Region, options.FrameRate, options.ShowMouseCursor);
+            frameWidth = _enhancedDxgiCapture.FrameWidth;
+            frameHeight = _enhancedDxgiCapture.FrameHeight;
+
+            Thread.Sleep(100);
+            var testFrame = _enhancedDxgiCapture.GetCurrentFrame();
+            if (testFrame != null && !IsBlackFrame(testFrame))
+            {
+                return true;
+            }
+
+            Debug.WriteLine("[ScreenRecording] Enhanced DXGI 검은 화면, 다음 모드로 전환");
+            _enhancedDxgiCapture.Stop();
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[ScreenRecording] Enhanced DXGI 시작 실패: {ex.Message}");
+            try { _enhancedDxgiCapture.Stop(); } catch { }
+            return false;
+        }
+    }
+
     private bool TryStartDxgiCapture(ScreenRecordingOptions options, out int frameWidth, out int frameHeight)
     {
         frameWidth = 0;
@@ -949,66 +1086,70 @@ public class ScreenRecordingEngine : IDisposable
             frameWidth = _dxgiCapture.FrameWidth;
             frameHeight = _dxgiCapture.FrameHeight;
 
-            // 첫 프레임 캡처 테스트 (검은 화면 감지)
-            Thread.Sleep(100); // DXGI 초기화 대기
+            Thread.Sleep(100);
             var testFrame = _dxgiCapture.GetCurrentFrame();
             if (testFrame != null && !IsBlackFrame(testFrame))
             {
                 return true;
             }
 
-            // 검은 화면이면 DXGI 실패로 처리
-            Debug.WriteLine("[ScreenRecording] DXGI 캡처 결과가 검은 화면, GDI로 전환");
+            Debug.WriteLine("[ScreenRecording] DXGI 검은 화면, GDI로 전환");
             _dxgiCapture.Stop();
             return false;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[ScreenRecording] DXGI 캡처 시작 실패: {ex.Message}");
+            Debug.WriteLine($"[ScreenRecording] DXGI 시작 실패: {ex.Message}");
             try { _dxgiCapture.Stop(); } catch { }
             return false;
         }
     }
 
-    /// <summary>
-    /// 프레임이 검은 화면(또는 거의 검은 화면)인지 확인
-    /// </summary>
     private static bool IsBlackFrame(byte[] frameData)
     {
         if (frameData == null || frameData.Length < 1000)
             return true;
 
-        // 샘플링으로 빠르게 검사 (전체 검사는 느림)
         int nonBlackPixels = 0;
-        int sampleStep = frameData.Length / 1000; // 약 1000개 샘플
+        int sampleStep = frameData.Length / 1000;
         if (sampleStep < 4) sampleStep = 4;
 
         for (int i = 0; i < frameData.Length - 4; i += sampleStep)
         {
-            // BGRA 형식: B, G, R, A
             byte b = frameData[i];
             byte g = frameData[i + 1];
             byte r = frameData[i + 2];
 
-            // 픽셀이 완전히 검은색(0,0,0)이 아니면 카운트
             if (r > 10 || g > 10 || b > 10)
             {
                 nonBlackPixels++;
-                if (nonBlackPixels > 50) // 5% 이상이 검은색이 아니면 유효한 프레임
+                if (nonBlackPixels > 50)
                     return false;
             }
         }
 
-        return true; // 대부분 검은색
+        return true;
     }
 
-    #endregion
+    private void OnStateChanged()
+    {
+        StateChanged?.Invoke(this, new RecordingStateChangedEventArgs { State = State });
+    }
 
-    #region 정리
+    private void OnError(string message)
+    {
+        Debug.WriteLine($"[ScreenRecording] 오류: {message}");
+        ErrorOccurred?.Invoke(this, new RecordingErrorEventArgs { Message = message });
+    }
 
     private void Cleanup()
     {
-        _isRecording = false;
+        try { _micCapture?.StopRecording(); } catch (Exception ex) { Debug.WriteLine($"[ScreenRecording] 마이크 중지 실패: {ex.Message}"); }
+        try { _loopbackCapture?.StopRecording(); } catch (Exception ex) { Debug.WriteLine($"[ScreenRecording] 루프백 중지 실패: {ex.Message}"); }
+        try { _silencePlayer?.Stop(); } catch (Exception ex) { Debug.WriteLine($"[ScreenRecording] 무음 재생 중지 실패: {ex.Message}"); }
+
+        _audioWriter?.Dispose();
+        _audioWriter = null;
 
         _micCapture?.Dispose();
         _micCapture = null;
@@ -1019,55 +1160,64 @@ public class ScreenRecordingEngine : IDisposable
         _silencePlayer?.Dispose();
         _silencePlayer = null;
 
-        _micLevelMeter.Reset();
-        _systemLevelMeter.Reset();
-        _micBuffer.Clear();
-        _systemBuffer.Clear();
-
-        // 버퍼 정리 (메모리 해제)
-        _soloAudioOutputBuffer = null;
-        _frameBuffer = null;
-        _frameBufferSize = 0;
+        _chromeDrmCapture?.Dispose();
     }
 
-    private void OnStateChanged()
-    {
-        StateChanged?.Invoke(this, new RecordingStateChangedEventArgs { State = State });
-    }
-
-    private void OnError(string message)
-    {
-        ErrorOccurred?.Invoke(this, new RecordingErrorEventArgs { Message = message });
-    }
-
-    public void Dispose()
+    /// <summary>
+    /// 비동기 Dispose (권장)
+    /// </summary>
+    public async Task DisposeAsync()
     {
         if (_disposed) return;
         _disposed = true;
 
+        // 인코딩 Task 취소 및 대기
+        try
+        {
+            _encodingCts?.Cancel();
+            if (_encodingTask != null)
+            {
+                await _encodingTask.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+        }
+        catch { }
+
+        await StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+        // 이벤트 핸들러 해제 (생성자에서 등록된 것들)
+        _gdiCapture.FrameAvailable -= OnFrameAvailable;
+        _gdiCapture.ErrorOccurred -= OnCaptureError;
+        _dxgiCapture.FrameAvailable -= OnFrameAvailable;
+        _dxgiCapture.ErrorOccurred -= OnDxgiCaptureError;
+        _enhancedDxgiCapture.FrameAvailable -= OnEnhancedFrameAvailable;
+        _enhancedDxgiCapture.ErrorOccurred -= OnEnhancedCaptureError;
+        _enhancedDxgiCapture.DrmDetected -= OnDrmDetected;
+        _chromeDrmCapture.FrameAvailable -= OnChromeFrameAvailable;
+        _chromeDrmCapture.ErrorOccurred -= OnChromeCaptureError;
+        _videoEncoder.EncodingCompleted -= OnEncodingCompleted;
+
         Cleanup();
-        _gdiCapture.Dispose();
-        _dxgiCapture.Dispose();
-        _videoEncoder.Dispose();
-        _mouseClickHighlight.Dispose();
-        _recordingBorder.Dispose();
-        _watermark.Dispose();
-        _webcamOverlay.Dispose();
-        _audioDataEvent.Dispose();
+
+        _gdiCapture?.Dispose();
+        _dxgiCapture?.Dispose();
+        _enhancedDxgiCapture?.Dispose();
+        _chromeDrmCapture?.Dispose();
+        _videoEncoder?.Dispose();
+        _audioWriter?.Dispose();
+        _micCapture?.Dispose();
+        _loopbackCapture?.Dispose();
+        _silencePlayer?.Dispose();
+    }
+
+    /// <summary>
+    /// 동기 Dispose (UI 스레드에서 호출 시 주의)
+    /// </summary>
+    public void Dispose()
+    {
+        if (_disposed) return;
+        // UI 스레드에서 호출 시 데드락 방지: Task.Run으로 컨텍스트 전환
+        Task.Run(async () => await DisposeAsync()).GetAwaiter().GetResult();
     }
 
     #endregion
-}
-
-/// <summary>
-/// 화면 녹화 완료 이벤트 인자
-/// </summary>
-public class ScreenRecordingCompletedEventArgs : EventArgs
-{
-    public bool Success { get; init; }
-    public string OutputPath { get; init; } = string.Empty;
-    public TimeSpan Duration { get; init; }
-    public long FrameCount { get; init; }
-    public string? ErrorMessage { get; init; }
-    public string? Warning { get; init; }
 }

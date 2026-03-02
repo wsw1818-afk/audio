@@ -62,6 +62,9 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainViewModel vm) return;
 
+        // 설정 저장 (트레이 최소화/종료 전 항상 저장)
+        vm.SaveSettings();
+
         // 압축 중이면 경고 메시지 표시
         if (vm.IsCompressingVideo)
         {
@@ -133,6 +136,11 @@ public partial class MainWindow : Window
                     vm.OpenOutputDirectoryCommand.Execute(null);
                     e.Handled = true;
                     break;
+
+                case Key.B: // 북마크 추가
+                    vm.AddBookmarkCommand.Execute(null);
+                    e.Handled = true;
+                    break;
             }
         }
 
@@ -141,6 +149,56 @@ public partial class MainWindow : Window
         {
             vm.StopPlaybackCommand.Execute(null);
             e.Handled = true;
+        }
+
+        // 재생 중 단축키
+        if (vm.IsPlaying)
+        {
+            switch (e.Key)
+            {
+                case Key.Left: // 5초 되감기
+                    vm.Rewind5Command.Execute(null);
+                    e.Handled = true;
+                    break;
+
+                case Key.Right: // 5초 앞으로
+                    vm.Forward5Command.Execute(null);
+                    e.Handled = true;
+                    break;
+
+                case Key.Up: // 배속 증가
+                    vm.IncreasePlaybackSpeedCommand.Execute(null);
+                    e.Handled = true;
+                    break;
+
+                case Key.Down: // 배속 감소
+                    vm.DecreasePlaybackSpeedCommand.Execute(null);
+                    e.Handled = true;
+                    break;
+
+                case Key.OemOpenBrackets: // [ 10초 되감기
+                    vm.Rewind10Command.Execute(null);
+                    e.Handled = true;
+                    break;
+
+                case Key.OemCloseBrackets: // ] 10초 앞으로
+                    vm.Forward10Command.Execute(null);
+                    e.Handled = true;
+                    break;
+
+                case Key.I: // 구간 시작 지점 설정
+                    vm.SetExtractStartCommand.Execute(null);
+                    e.Handled = true;
+                    break;
+
+                case Key.O: // 구간 끝 지점 설정 (Ctrl 없이)
+                    if (Keyboard.Modifiers == ModifierKeys.None)
+                    {
+                        vm.SetExtractEndCommand.Execute(null);
+                        e.Handled = true;
+                    }
+                    break;
+            }
         }
     }
 

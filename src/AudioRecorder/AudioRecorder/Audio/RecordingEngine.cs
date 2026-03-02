@@ -66,6 +66,14 @@ public class RecordingEngine : IDisposable
     // 기록된 바이트 수 추적 (UI에서 파일 I/O 없이 크기 표시용)
     private long _bytesWritten;
 
+    // 자동 분할 녹음 관련
+    private bool _autoSplitEnabled;
+    private int _autoSplitIntervalMinutes;
+    private int _segmentIndex;
+    private string _baseFilePath = string.Empty; // 첫 번째 세그먼트의 기본 경로 (확장자 제외)
+    private TimeSpan _nextSplitTime;
+    private readonly List<string> _completedSegments = new();
+
     public RecordingState State { get; private set; } = RecordingState.Stopped;
     public long BytesWritten => _bytesWritten;
     public TimeSpan ElapsedTime => _stopwatch.Elapsed;
@@ -78,10 +86,14 @@ public class RecordingEngine : IDisposable
     public float MicVolume { get; set; } = 1.0f;
     public float SystemVolume { get; set; } = 1.0f;
 
+    public int SegmentIndex => _segmentIndex;
+    public IReadOnlyList<string> CompletedSegments => _completedSegments;
+
     public event EventHandler<LevelEventArgs>? LevelUpdated;
     public event EventHandler<RecordingStateChangedEventArgs>? StateChanged;
     public event EventHandler<RecordingErrorEventArgs>? ErrorOccurred;
     public event EventHandler<SyncDiagnostics>? SyncDiagnosticsUpdated;
+    public event EventHandler<SegmentCompletedEventArgs>? SegmentCompleted;
 
     public RecordingEngine(DeviceManager deviceManager)
     {
@@ -99,8 +111,25 @@ public class RecordingEngine : IDisposable
         _options = options;
         TargetFormat = options.Format;
 
+        // 자동 분할 설정 초기화
+        _autoSplitEnabled = options.AutoSplitEnabled;
+        _autoSplitIntervalMinutes = options.AutoSplitIntervalMinutes;
+        _segmentIndex = 1;
+        _completedSegments.Clear();
+
         // 항상 WAV로 먼저 녹음 (FLAC/MP3는 녹음 후 변환)
-        _currentFilePath = Path.Combine(options.OutputDirectory, $"Recording_{DateTime.Now:yyyyMMdd_HHmmss}.wav");
+        var baseFileName = $"Recording_{DateTime.Now:yyyyMMdd_HHmmss}";
+        _baseFilePath = Path.Combine(options.OutputDirectory, baseFileName);
+
+        if (_autoSplitEnabled)
+        {
+            _currentFilePath = $"{_baseFilePath}_Part{_segmentIndex:D2}.wav";
+            _nextSplitTime = TimeSpan.FromMinutes(_autoSplitIntervalMinutes);
+        }
+        else
+        {
+            _currentFilePath = $"{_baseFilePath}.wav";
+        }
 
         // 출력 디렉토리 확인
         var dir = Path.GetDirectoryName(_currentFilePath);
@@ -130,10 +159,22 @@ public class RecordingEngine : IDisposable
             _writer.Flush();
             Debug.WriteLine($"[RecordingEngine] WAV 파일 생성: {_currentFilePath}");
 
-            // 주기적 Flush 타이머 (5초마다)
+            // 주기적 Flush 타이머 (5초마다) + 자동 분할 체크
             _flushTimer = new System.Threading.Timer(_ =>
             {
-                try { _writer?.Flush(); }
+                try
+                {
+                    _writer?.Flush();
+
+                    // 자동 분할 체크
+                    if (_autoSplitEnabled && !_isPaused && State == RecordingState.Recording)
+                    {
+                        if (_stopwatch.Elapsed >= _nextSplitTime)
+                        {
+                            PerformFileSplit();
+                        }
+                    }
+                }
                 catch { /* ignore */ }
             }, null, 5000, 5000);
 
@@ -522,6 +563,78 @@ public class RecordingEngine : IDisposable
     }
 
     /// <summary>
+    /// 자동 분할: 현재 파일을 닫고 새 파일로 전환
+    /// write lock 내에서 writer를 교체하여 데이터 손실 없이 분할
+    /// </summary>
+    private void PerformFileSplit()
+    {
+        var completedFilePath = _currentFilePath;
+        var completedBytesWritten = _bytesWritten;
+        var segmentDuration = TimeSpan.FromMinutes(_autoSplitIntervalMinutes);
+
+        // 다음 세그먼트 파일 경로 생성
+        _segmentIndex++;
+        var newFilePath = $"{_baseFilePath}_Part{_segmentIndex:D2}.wav";
+
+        Debug.WriteLine($"[RecordingEngine] 자동 분할: Part{_segmentIndex - 1:D2} -> Part{_segmentIndex:D2} (경과: {_stopwatch.Elapsed:hh\\:mm\\:ss})");
+
+        lock (_writeLock)
+        {
+            try
+            {
+                // 1. 현재 파일 플러시 및 닫기
+                if (_writer != null)
+                {
+                    _writer.Flush();
+                    _writer.Dispose();
+                    _writer = null;
+                    Debug.WriteLine($"[RecordingEngine] 세그먼트 {_segmentIndex - 1} 닫기 완료: {completedBytesWritten} bytes");
+                }
+
+                // 2. 새 파일 열기
+                _writer = new WaveFileWriter(newFilePath, _outputFormat);
+                _writer.Flush();
+                _currentFilePath = newFilePath;
+                _bytesWritten = 0;
+
+                Debug.WriteLine($"[RecordingEngine] 새 세그먼트 시작: {newFilePath}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[RecordingEngine] 파일 분할 실패: {ex.Message}");
+                OnError($"파일 분할 실패: {ex.Message}");
+                return;
+            }
+        }
+
+        // 다음 분할 시간 설정
+        _nextSplitTime = _nextSplitTime.Add(TimeSpan.FromMinutes(_autoSplitIntervalMinutes));
+
+        // 완료된 세그먼트 WAV 헤더 복구 (비동기적으로)
+        _completedSegments.Add(completedFilePath);
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                RepairWavHeaderIfNeeded(completedFilePath, completedBytesWritten, _outputFormat);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[RecordingEngine] 세그먼트 WAV 헤더 복구 실패: {ex.Message}");
+            }
+
+            // 분할 완료 이벤트 발생
+            SegmentCompleted?.Invoke(this, new SegmentCompletedEventArgs
+            {
+                FilePath = completedFilePath,
+                SegmentIndex = _segmentIndex - 1,
+                Duration = segmentDuration,
+                FileSize = File.Exists(completedFilePath) ? new FileInfo(completedFilePath).Length : 0
+            });
+        });
+    }
+
+    /// <summary>
     /// 남은 버퍼 데이터 플러시 (재사용 버퍼 사용)
     /// </summary>
     private void FlushRemainingBuffers()
@@ -882,6 +995,24 @@ public class RecordingStateChangedEventArgs : EventArgs
 public class RecordingErrorEventArgs : EventArgs
 {
     public string Message { get; init; } = string.Empty;
+}
+
+public class SegmentCompletedEventArgs : EventArgs
+{
+    public string FilePath { get; init; } = string.Empty;
+    public int SegmentIndex { get; init; }
+    public TimeSpan Duration { get; init; }
+    public long FileSize { get; init; }
+}
+
+public class ScreenRecordingCompletedEventArgs : EventArgs
+{
+    public bool Success { get; init; }
+    public string OutputPath { get; init; } = string.Empty;
+    public TimeSpan Duration { get; init; }
+    public long FrameCount { get; init; }
+    public string? ErrorMessage { get; init; }
+    public string? Warning { get; init; }
 }
 
 /// <summary>

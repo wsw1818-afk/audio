@@ -1,3 +1,4 @@
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
@@ -8,16 +9,42 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "AudioRecorder", "AudioRecor
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioRecorder", "src\AudioRecorder\AudioRecorder\AudioRecorder.csproj", "{FA3888F0-BB47-43C8-CACD-0ED236402D73}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioRecorder.Tests", "src\AudioRecorder\AudioRecorder.Tests\AudioRecorder.Tests.csproj", "{D2926822-D954-4797-A04E-17045226DF98}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
 		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Debug|x64.Build.0 = Debug|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Debug|x86.Build.0 = Debug|Any CPU
 		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Release|x64.ActiveCfg = Release|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Release|x64.Build.0 = Release|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Release|x86.ActiveCfg = Release|Any CPU
+		{FA3888F0-BB47-43C8-CACD-0ED236402D73}.Release|x86.Build.0 = Release|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Debug|x64.Build.0 = Debug|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Debug|x86.Build.0 = Debug|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Release|x64.ActiveCfg = Release|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Release|x64.Build.0 = Release|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Release|x86.ActiveCfg = Release|Any CPU
+		{D2926822-D954-4797-A04E-17045226DF98}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -25,6 +52,7 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{655C519C-7650-25BF-6C17-102EE1BE220C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{FA3888F0-BB47-43C8-CACD-0ED236402D73} = {655C519C-7650-25BF-6C17-102EE1BE220C}
+		{D2926822-D954-4797-A04E-17045226DF98} = {655C519C-7650-25BF-6C17-102EE1BE220C}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {DC95E1F6-B938-4452-B60F-1C9778B8A08A}

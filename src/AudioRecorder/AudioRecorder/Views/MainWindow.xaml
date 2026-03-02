@@ -833,6 +833,12 @@
                                                     </Button.ContextMenu>
                                                 </Button>
                                                 <Button Style="{StaticResource FileItemButtonStyle}"
+                                                        Content="📝" ToolTip="녹취록 변환"
+                                                        Background="#20B2AA"
+                                                        Command="{Binding DataContext.OpenTranscriptionCommand,
+                                                            RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Style="{StaticResource FileItemButtonStyle}"
                                                         Content="🗑" ToolTip="삭제"
                                                         Background="{StaticResource DangerColor}"
                                                         Command="{Binding DataContext.DeleteRecordingCommand,
@@ -962,6 +968,30 @@
                                     <ComboBox ItemsSource="{Binding CloseActionOptions}"
                                               SelectedItem="{Binding SelectedCloseActionText}"
                                               Width="150" FontSize="12"/>
+                                </StackPanel>
+
+                                <!-- 자동 분할 녹음 (오디오 모드일 때만 표시) -->
+                                <StackPanel Visibility="{Binding IsAudioOnlyMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    <TextBlock Text="✂️ 자동 분할" FontSize="13" FontWeight="Medium"
+                                               Foreground="{StaticResource TextColor}" Margin="0,0,0,8"/>
+
+                                    <CheckBox Content="자동 분할 녹음"
+                                              IsChecked="{Binding AutoSplitEnabled}"
+                                              Foreground="{StaticResource TextColor}"
+                                              Margin="0,0,0,8"/>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,15"
+                                                IsEnabled="{Binding AutoSplitEnabled}">
+                                        <TextBlock Text="분할 간격:" FontSize="11"
+                                                   Foreground="{StaticResource SubTextColor}"
+                                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <ComboBox ItemsSource="{Binding AutoSplitIntervalOptions}"
+                                                  SelectedItem="{Binding AutoSplitIntervalMinutes}"
+                                                  Width="70" FontSize="11"/>
+                                        <TextBlock Text="분" FontSize="11"
+                                                   Foreground="{StaticResource SubTextColor}"
+                                                   VerticalAlignment="Center" Margin="5,0,0,0"/>
+                                    </StackPanel>
                                 </StackPanel>
 
                                 <!-- 화면 녹화 옵션 (화면 녹화 모드일 때만 표시) -->

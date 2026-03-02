@@ -11,6 +11,18 @@ namespace AudioRecorder.ViewModels;
 
 public partial class MainViewModel : ObservableObject, IDisposable
 {
+    private static readonly HashSet<string> AllowedMediaExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".wav", ".mp3", ".flac", ".aac", ".ogg", ".m4a",
+        ".mp4", ".avi", ".mkv", ".mov", ".wmv", ".webm"
+    };
+
+    private static bool IsAllowedMediaFile(string filePath)
+    {
+        var ext = Path.GetExtension(filePath);
+        return AllowedMediaExtensions.Contains(ext);
+    }
+
     private readonly DeviceManager _deviceManager;
     private readonly RecordingEngine _recordingEngine;
     private readonly ScreenRecordingEngine _screenRecordingEngine;
@@ -327,6 +339,54 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private double _playbackDuration = 1;
 
+    // 배속 재생
+    [ObservableProperty]
+    private double _playbackSpeed = 1.0;
+
+    [ObservableProperty]
+    private string _playbackSpeedText = "1.0x";
+
+    public IReadOnlyList<double> PlaybackSpeedOptions { get; } = new[] { 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0 };
+
+    // 북마크 (녹음 중 중요 시점 표시)
+    [ObservableProperty]
+    private ObservableCollection<BookmarkInfo> _bookmarks = new();
+
+    [ObservableProperty]
+    private string _currentRecordingPath = "";
+
+    // 파일명 템플릿
+    [ObservableProperty]
+    private string _fileNameTemplate = "Recording_{datetime}";
+
+    [ObservableProperty]
+    private string _recordingTitle = "";
+
+    // 노이즈 제거
+    [ObservableProperty]
+    private bool _isProcessingAudio;
+
+    [ObservableProperty]
+    private string _audioProcessingStatus = "";
+
+    public IReadOnlyList<string> NoiseReductionOptions { get; } = new[] { "약함", "보통", "강함" };
+
+    // 구간 추출
+    [ObservableProperty]
+    private TimeSpan _extractStartTime = TimeSpan.Zero;
+
+    [ObservableProperty]
+    private TimeSpan _extractEndTime = TimeSpan.Zero;
+
+    // 자동 분할 녹음
+    [ObservableProperty]
+    private bool _autoSplitEnabled = false;
+
+    [ObservableProperty]
+    private int _autoSplitIntervalMinutes = 60;
+
+    public IReadOnlyList<int> AutoSplitIntervalOptions { get; } = new[] { 10, 20, 30, 60, 90, 120, 180, 240 };
+
     public MainViewModel()
     {
         _deviceManager = new DeviceManager();
@@ -347,6 +407,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _closeAction = _settings.CloseAction;
         _autoVideoCompression = _settings.VideoCompressionQuality;
 
+        // 자동 분할 설정 적용
+        _autoSplitEnabled = _settings.AutoSplitEnabled;
+        _autoSplitIntervalMinutes = _settings.AutoSplitIntervalMinutes;
+
+        // 화면 녹화 설정 적용
+        _selectedVideoQuality = _settings.VideoQuality;
+        _showMouseCursor = _settings.ShowMouseCursor;
+        _highlightMouseClicks = _settings.HighlightMouseClicks;
+        _countdownSeconds = _settings.CountdownSeconds;
+        _showRecordingBorder = _settings.ShowRecordingBorder;
+        _selectedResolution = _settings.Resolution;
+        _selectedAudioBitrate = _settings.AudioBitrate;
+
         // 녹음 타이머 설정 (UI 업데이트용) - 100ms로 최적화
         _timer = new DispatcherTimer
         {
@@ -365,6 +438,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _recordingEngine.LevelUpdated += OnLevelUpdated;
         _recordingEngine.StateChanged += OnStateChanged;
         _recordingEngine.ErrorOccurred += OnErrorOccurred;
+        _recordingEngine.SegmentCompleted += OnSegmentCompleted;
         _audioPlayer.PlaybackStopped += OnPlaybackStopped;
 
         // 화면 녹화 이벤트 연결
@@ -480,6 +554,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.RecordingFormat = SelectedRecordingFormat;
         _settings.CloseAction = CloseAction;
         _settings.VideoCompressionQuality = AutoVideoCompression;
+
+        // 자동 분할 설정 저장
+        _settings.AutoSplitEnabled = AutoSplitEnabled;
+        _settings.AutoSplitIntervalMinutes = AutoSplitIntervalMinutes;
+
+        // 화면 녹화 설정 저장
+        _settings.VideoQuality = SelectedVideoQuality;
+        _settings.ShowMouseCursor = ShowMouseCursor;
+        _settings.HighlightMouseClicks = HighlightMouseClicks;
+        _settings.CountdownSeconds = CountdownSeconds;
+        _settings.ShowRecordingBorder = ShowRecordingBorder;
+        _settings.Resolution = SelectedResolution;
+        _settings.AudioBitrate = SelectedAudioBitrate;
+
         _settings.Save();
 
         SaveRecentFiles();
@@ -552,7 +640,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
             MicrophoneVolume = MicVolume,
             SystemVolume = SystemVolume,
             OutputDirectory = OutputDirectory,
-            Format = SelectedRecordingFormat
+            Format = SelectedRecordingFormat,
+            AutoSplitEnabled = AutoSplitEnabled,
+            AutoSplitIntervalMinutes = AutoSplitIntervalMinutes
         };
 
         _recordingEngine.Start(options);
@@ -561,7 +651,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 수동으로 상태 업데이트
         RecordingState = RecordingState.Recording;
         var formatName = SelectedRecordingFormat.GetDisplayName();
-        StatusText = $"녹음 중... ({formatName})";
+        var splitInfo = AutoSplitEnabled ? $", {AutoSplitIntervalMinutes}분 분할" : "";
+        StatusText = $"녹음 중... ({formatName}{splitInfo})";
     }
 
     private async void StartScreenRecording()
@@ -634,6 +725,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private async Task StopRecordingAsync()
     {
         System.Diagnostics.Debug.WriteLine("[ViewModel] StopRecordingAsync 시작");
+        _isStoppingScreenRecording = true;
+        StartRecordingCommand.NotifyCanExecuteChanged();
         try
         {
             _timer.Stop();
@@ -918,6 +1011,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 비디오 파일은 기본 앱으로 열기
         if (recording.IsVideo)
         {
+            if (!IsAllowedMediaFile(recording.FilePath))
+            {
+                StatusText = $"지원하지 않는 파일 형식입니다: {Path.GetExtension(recording.FilePath)}";
+                return;
+            }
+
             try
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -1038,12 +1137,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (recording != null && File.Exists(recording.FilePath))
         {
+            if (!IsAllowedMediaFile(recording.FilePath))
+            {
+                StatusText = $"지원하지 않는 파일 형식입니다: {Path.GetExtension(recording.FilePath)}";
+                return;
+            }
+
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {
                 FileName = recording.FilePath,
                 UseShellExecute = true
             });
         }
+    }
+
+    [RelayCommand]
+    private void OpenTranscription(RecordingInfo? recording)
+    {
+        if (recording == null || !File.Exists(recording.FilePath))
+            return;
+
+        if (!SpeechToTextService.IsSupportedAudioFile(recording.FilePath))
+        {
+            StatusText = $"녹취록 변환을 지원하지 않는 형식입니다: {Path.GetExtension(recording.FilePath)}";
+            return;
+        }
+
+        var window = new Views.TranscriptionWindow(recording.FilePath, _conversionService);
+        window.Owner = System.Windows.Application.Current.MainWindow;
+        window.ShowDialog();
     }
 
     [RelayCommand]
@@ -1084,6 +1206,205 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _videoConversionService.Cancel();
             StatusText = "압축 취소 중...";
         }
+    }
+
+    // ========== 배속 재생 명령 ==========
+    [RelayCommand]
+    private void SetPlaybackSpeed(double speed)
+    {
+        PlaybackSpeed = speed;
+        _audioPlayer.PlaybackSpeed = speed;
+        PlaybackSpeedText = $"{speed:F2}x";
+    }
+
+    [RelayCommand]
+    private void IncreasePlaybackSpeed()
+    {
+        var currentIndex = Array.IndexOf(PlaybackSpeedOptions.ToArray(), PlaybackSpeed);
+        if (currentIndex < PlaybackSpeedOptions.Count - 1)
+            SetPlaybackSpeed(PlaybackSpeedOptions[currentIndex + 1]);
+    }
+
+    [RelayCommand]
+    private void DecreasePlaybackSpeed()
+    {
+        var currentIndex = Array.IndexOf(PlaybackSpeedOptions.ToArray(), PlaybackSpeed);
+        if (currentIndex > 0)
+            SetPlaybackSpeed(PlaybackSpeedOptions[currentIndex - 1]);
+    }
+
+    // ========== 되감기/앞으로 명령 ==========
+    [RelayCommand]
+    private void Rewind5() => _audioPlayer.Rewind5();
+
+    [RelayCommand]
+    private void Rewind10() => _audioPlayer.Rewind10();
+
+    [RelayCommand]
+    private void Forward5() => _audioPlayer.Forward5();
+
+    [RelayCommand]
+    private void Forward10() => _audioPlayer.Forward10();
+
+    // ========== 북마크 명령 ==========
+    [RelayCommand]
+    private void AddBookmark()
+    {
+        if (RecordingState != RecordingState.Recording) return;
+
+        var elapsed = _recordingEngine.ElapsedTime;
+        var bookmark = new BookmarkInfo
+        {
+            Position = elapsed,
+            Label = $"북마크 {Bookmarks.Count + 1}"
+        };
+        Bookmarks.Add(bookmark);
+        StatusText = $"📌 북마크 추가: {bookmark.PositionText}";
+    }
+
+    [RelayCommand]
+    private void SeekToBookmark(BookmarkInfo? bookmark)
+    {
+        if (bookmark == null) return;
+        _audioPlayer.Seek(bookmark.Position);
+    }
+
+    [RelayCommand]
+    private void RemoveBookmark(BookmarkInfo? bookmark)
+    {
+        if (bookmark != null)
+            Bookmarks.Remove(bookmark);
+    }
+
+    [RelayCommand]
+    private void ClearBookmarks()
+    {
+        Bookmarks.Clear();
+    }
+
+    // ========== 노이즈 제거 명령 ==========
+    [RelayCommand]
+    private async Task RemoveNoiseAsync(RecordingInfo? recording)
+    {
+        await RemoveNoiseWithLevelAsync(recording, "보통");
+    }
+
+    [RelayCommand]
+    private async Task RemoveNoiseLightAsync(RecordingInfo? recording)
+    {
+        await RemoveNoiseWithLevelAsync(recording, "약함");
+    }
+
+    [RelayCommand]
+    private async Task RemoveNoiseStrongAsync(RecordingInfo? recording)
+    {
+        await RemoveNoiseWithLevelAsync(recording, "강함");
+    }
+
+    private async Task RemoveNoiseWithLevelAsync(RecordingInfo? recording, string levelName)
+    {
+        if (recording == null || !File.Exists(recording.FilePath)) return;
+        if (recording.IsVideo)
+        {
+            StatusText = "오디오 파일만 노이즈 제거가 가능합니다.";
+            return;
+        }
+        if (IsProcessingAudio)
+        {
+            StatusText = "이미 처리 중입니다.";
+            return;
+        }
+
+        var level = levelName switch
+        {
+            "약함" => NoiseReductionLevel.Light,
+            "강함" => NoiseReductionLevel.Strong,
+            _ => NoiseReductionLevel.Medium
+        };
+
+        IsProcessingAudio = true;
+        AudioProcessingStatus = $"노이즈 제거 중 ({levelName})...";
+        StatusText = AudioProcessingStatus;
+
+        try
+        {
+            var result = await _conversionService.RemoveNoiseAsync(recording.FilePath, null, level);
+            if (result)
+            {
+                StatusText = "✅ 노이즈 제거 완료";
+                LoadRecentFiles();
+            }
+            else
+            {
+                StatusText = "❌ 노이즈 제거 실패";
+            }
+        }
+        finally
+        {
+            IsProcessingAudio = false;
+            AudioProcessingStatus = "";
+        }
+    }
+
+    // ========== 구간 추출 명령 ==========
+    [RelayCommand]
+    private async Task ExtractSegmentAsync(RecordingInfo? recording)
+    {
+        if (recording == null || !File.Exists(recording.FilePath)) return;
+        if (IsProcessingAudio)
+        {
+            StatusText = "이미 처리 중입니다.";
+            return;
+        }
+
+        // 현재 재생 위치를 끝 시간으로 설정
+        if (ExtractEndTime == TimeSpan.Zero && _audioPlayer.TotalDuration > TimeSpan.Zero)
+        {
+            ExtractEndTime = _audioPlayer.TotalDuration;
+        }
+
+        if (ExtractStartTime >= ExtractEndTime)
+        {
+            StatusText = "시작 시간이 끝 시간보다 작아야 합니다.";
+            return;
+        }
+
+        IsProcessingAudio = true;
+        AudioProcessingStatus = $"구간 추출 중 ({ExtractStartTime:mm\\:ss} ~ {ExtractEndTime:mm\\:ss})...";
+        StatusText = AudioProcessingStatus;
+
+        try
+        {
+            var result = await _conversionService.ExtractSegmentAsync(recording.FilePath, ExtractStartTime, ExtractEndTime);
+            if (result)
+            {
+                StatusText = "✅ 구간 추출 완료";
+                LoadRecentFiles();
+            }
+            else
+            {
+                StatusText = "❌ 구간 추출 실패";
+            }
+        }
+        finally
+        {
+            IsProcessingAudio = false;
+            AudioProcessingStatus = "";
+        }
+    }
+
+    [RelayCommand]
+    private void SetExtractStart()
+    {
+        ExtractStartTime = _audioPlayer.CurrentPosition;
+        StatusText = $"시작 지점 설정: {ExtractStartTime:mm\\:ss}";
+    }
+
+    [RelayCommand]
+    private void SetExtractEnd()
+    {
+        ExtractEndTime = _audioPlayer.CurrentPosition;
+        StatusText = $"끝 지점 설정: {ExtractEndTime:mm\\:ss}";
     }
 
     private async Task CompressVideoAsync(RecordingInfo? recording, VideoQuality quality)
@@ -1292,7 +1613,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (RecordingState == RecordingState.Recording)
             {
                 var sizeMb = _recordingEngine.BytesWritten / (1024.0 * 1024);
-                FileInfo = $"파일: {sizeMb:F1} MB";
+                if (AutoSplitEnabled && _recordingEngine.SegmentIndex > 0)
+                {
+                    FileInfo = $"Part {_recordingEngine.SegmentIndex} | {sizeMb:F1} MB";
+                }
+                else
+                {
+                    FileInfo = $"파일: {sizeMb:F1} MB";
+                }
             }
         }
     }
@@ -1359,6 +1687,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
             StatusText = e.Message;
+        });
+    }
+
+    private void OnSegmentCompleted(object? sender, SegmentCompletedEventArgs e)
+    {
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            // 완료된 세그먼트를 최근 파일 목록에 추가
+            AddToRecentFiles(e.FilePath, e.Duration);
+
+            var segmentName = Path.GetFileName(e.FilePath);
+            var sizeMb = e.FileSize / (1024.0 * 1024);
+            StatusText = $"녹음 중... (Part {e.SegmentIndex} 저장: {sizeMb:F1}MB, Part {e.SegmentIndex + 1} 녹음 중)";
+
+            System.Diagnostics.Debug.WriteLine($"[ViewModel] 세그먼트 완료: {segmentName} ({sizeMb:F1}MB)");
         });
     }
 
@@ -1457,20 +1800,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     StatusText = $"압축 완료! {originalSize / (1024.0 * 1024):F1}MB → {compressedSize / (1024.0 * 1024):F1}MB ({ratio:F0}% 감소)";
 
-                    // 압축된 파일을 목록에 추가
-                    var compressedRecording = new RecordingInfo
-                    {
-                        FilePath = compressedPath,
-                        RecordedAt = DateTime.Now,
-                        Duration = recording.Duration,
-                        FileSize = compressedSize
-                    };
+                    // 원본 삭제 후 압축 파일로 교체
+                    try { File.Delete(videoPath); } catch { }
 
                     System.Windows.Application.Current?.Dispatcher.Invoke(() =>
                     {
-                        RecentFiles.Insert(0, compressedRecording);
-                        if (RecentFiles.Count > 10)
-                            RecentFiles.RemoveAt(RecentFiles.Count - 1);
+                        // 목록에서 원본을 압축 파일로 교체
+                        var existingIndex = -1;
+                        for (int i = 0; i < RecentFiles.Count; i++)
+                        {
+                            if (RecentFiles[i].FilePath == recording.FilePath)
+                            {
+                                existingIndex = i;
+                                break;
+                            }
+                        }
+
+                        var compressedRecording = new RecordingInfo
+                        {
+                            FilePath = compressedPath,
+                            RecordedAt = recording.RecordedAt,
+                            Duration = recording.Duration,
+                            FileSize = compressedSize
+                        };
+
+                        if (existingIndex >= 0)
+                        {
+                            RecentFiles[existingIndex] = compressedRecording;
+                        }
+                        else
+                        {
+                            RecentFiles.Insert(0, compressedRecording);
+                            if (RecentFiles.Count > 10)
+                                RecentFiles.RemoveAt(RecentFiles.Count - 1);
+                        }
 
                         _cachedFilteredFiles = null;
                         OnPropertyChanged(nameof(FilteredRecentFiles));
@@ -1627,6 +1990,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _recordingEngine.LevelUpdated -= OnLevelUpdated;
         _recordingEngine.StateChanged -= OnStateChanged;
         _recordingEngine.ErrorOccurred -= OnErrorOccurred;
+        _recordingEngine.SegmentCompleted -= OnSegmentCompleted;
         _audioPlayer.PlaybackStopped -= OnPlaybackStopped;
         _screenRecordingEngine.LevelUpdated -= OnLevelUpdated;
         _screenRecordingEngine.StateChanged -= OnScreenRecordingStateChanged;
