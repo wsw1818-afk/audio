@@ -15,15 +15,17 @@ namespace AudioRecorder.Audio;
 public class ScreenRecordingEngine : IDisposable
 {
     private readonly DeviceManager _deviceManager;
-    private readonly ScreenCaptureService _gdiCapture;
-    private readonly DxgiScreenCaptureService _dxgiCapture;
-    private readonly EnhancedDxgiCaptureService _enhancedDxgiCapture;
-    private readonly ChromeDrmCaptureService _chromeDrmCapture;
-    private readonly VideoEncoderService _videoEncoder;
-    private readonly MouseClickHighlightService _mouseClickHighlight;
-    private readonly RecordingBorderService _recordingBorder;
-    private readonly WatermarkService _watermark;
-    private readonly WebcamOverlayService _webcamOverlay;
+    private ScreenCaptureService? _gdiCapture;
+    private DxgiScreenCaptureService? _dxgiCapture;
+    private EnhancedDxgiCaptureService? _enhancedDxgiCapture;
+    private ChromeDrmCaptureService? _chromeDrmCapture;
+    private VideoEncoderService? _videoEncoder;
+    private MouseClickHighlightService? _mouseClickHighlight;
+    private RecordingBorderService? _recordingBorder;
+    private WatermarkService? _watermark;
+    private WebcamOverlayService? _webcamOverlay;
+    private int _servicesInitializedFlag; // 0 = not yet, 1 = initialized (Interlocked)
+    private readonly object _initLock = new();
 
     // 현재 사용 중인 캡처 방식
     private enum CaptureMode { None, GDI, DXGI, EnhancedDXGI, ChromeDRM }
@@ -87,10 +89,10 @@ public class ScreenRecordingEngine : IDisposable
     /// </summary>
     public long FrameCount => _captureMode switch
     {
-        CaptureMode.ChromeDRM => _chromeDrmCapture.FrameCount,
-        CaptureMode.EnhancedDXGI => _enhancedDxgiCapture.FrameCount,
-        CaptureMode.DXGI => _dxgiCapture.FrameCount,
-        _ => _gdiCapture.FrameCount
+        CaptureMode.ChromeDRM => _chromeDrmCapture?.FrameCount ?? 0,
+        CaptureMode.EnhancedDXGI => _enhancedDxgiCapture?.FrameCount ?? 0,
+        CaptureMode.DXGI => _dxgiCapture?.FrameCount ?? 0,
+        _ => _gdiCapture?.FrameCount ?? 0
     };
 
     /// <summary>
@@ -119,12 +121,12 @@ public class ScreenRecordingEngine : IDisposable
     /// <summary>
     /// FFmpeg 사용 가능 여부
     /// </summary>
-    public bool IsFFmpegAvailable => _videoEncoder.IsFFmpegAvailable;
+    public bool IsFFmpegAvailable => _videoEncoder?.IsFFmpegAvailable ?? VideoEncoderService.IsFFmpegInstalled();
 
     /// <summary>
-    /// Chrome DRM 캡처 서비스 (외부에서 접근용)
+    /// Chrome DRM 캡처 서비스 (외부에서 접근용, 지연 초기화 전에는 null)
     /// </summary>
-    public ChromeDrmCaptureService ChromeDrmCapture => _chromeDrmCapture;
+    public ChromeDrmCaptureService? ChromeDrmCapture => _chromeDrmCapture;
 
     // 이벤트
     public event EventHandler<LevelEventArgs>? LevelUpdated;
@@ -135,7 +137,22 @@ public class ScreenRecordingEngine : IDisposable
     public ScreenRecordingEngine(DeviceManager deviceManager)
     {
         _deviceManager = deviceManager;
-        _gdiCapture = new ScreenCaptureService();
+        // 캡처 서비스는 실제 녹화 시작 시 지연 초기화 (앱 시작 속도 개선)
+    }
+
+    /// <summary>
+    /// 캡처/인코딩 서비스 지연 초기화 (녹화 시작 시 1회만 실행)
+    /// </summary>
+    private void EnsureServicesInitialized()
+    {
+        // 빠른 경로: 이미 초기화된 경우 즉시 반환 (Volatile 읽기)
+        if (System.Threading.Volatile.Read(ref _servicesInitializedFlag) == 1) return;
+
+        lock (_initLock)
+        {
+            if (_servicesInitializedFlag == 1) return;
+
+            _gdiCapture = new ScreenCaptureService();
         _dxgiCapture = new DxgiScreenCaptureService();
         _enhancedDxgiCapture = new EnhancedDxgiCaptureService();
         _chromeDrmCapture = new ChromeDrmCaptureService();
@@ -156,7 +173,18 @@ public class ScreenRecordingEngine : IDisposable
         _chromeDrmCapture.FrameAvailable += OnChromeFrameAvailable;
         _chromeDrmCapture.ErrorOccurred += OnChromeCaptureError;
         _videoEncoder.EncodingCompleted += OnEncodingCompleted;
+
+            // 모든 초기화가 끝난 뒤에만 플래그를 세운다 (부분 초기화 상태 노출 방지)
+            System.Threading.Volatile.Write(ref _servicesInitializedFlag, 1);
+        }
     }
+
+    /// <summary>
+    /// 초기화된 캡처 서비스가 null이 아님을 보장. 미초기화 시 명확한 예외를 던진다.
+    /// </summary>
+    private static T RequireService<T>(T? service, string name) where T : class
+        => service ?? throw new InvalidOperationException(
+            $"{name}가 초기화되지 않았습니다. Start()가 선행되어야 합니다.");
 
     /// <summary>
     /// 녹화 시작
@@ -166,8 +194,12 @@ public class ScreenRecordingEngine : IDisposable
         if (State != RecordingState.Stopped || _isStopping)
             throw new InvalidOperationException("이미 녹화 중이거나 정지 작업이 진행 중입니다.");
 
-        if (!_videoEncoder.IsFFmpegAvailable)
-            throw new InvalidOperationException("FFmpeg를 찾을 수 없습니다. ffmpeg.exe를 앱 폴터에 복사하세요.");
+        // 캡처/인코딩 서비스 지연 초기화
+        EnsureServicesInitialized();
+
+        var encoder = RequireService(_videoEncoder, nameof(VideoEncoderService));
+        if (!encoder.IsFFmpegAvailable)
+            throw new InvalidOperationException("FFmpeg를 찾을 수 없습니다. ffmpeg.exe를 앱 폴더에 복사하세요.");
 
         _options = options;
 
@@ -1184,17 +1216,15 @@ public class ScreenRecordingEngine : IDisposable
 
         await StopAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-        // 이벤트 핸들러 해제 (생성자에서 등록된 것들)
-        _gdiCapture.FrameAvailable -= OnFrameAvailable;
-        _gdiCapture.ErrorOccurred -= OnCaptureError;
-        _dxgiCapture.FrameAvailable -= OnFrameAvailable;
-        _dxgiCapture.ErrorOccurred -= OnDxgiCaptureError;
-        _enhancedDxgiCapture.FrameAvailable -= OnEnhancedFrameAvailable;
-        _enhancedDxgiCapture.ErrorOccurred -= OnEnhancedCaptureError;
-        _enhancedDxgiCapture.DrmDetected -= OnDrmDetected;
-        _chromeDrmCapture.FrameAvailable -= OnChromeFrameAvailable;
-        _chromeDrmCapture.ErrorOccurred -= OnChromeCaptureError;
-        _videoEncoder.EncodingCompleted -= OnEncodingCompleted;
+        // 이벤트 핸들러 해제 (지연 초기화되었을 때만)
+        if (System.Threading.Volatile.Read(ref _servicesInitializedFlag) == 1)
+        {
+            if (_gdiCapture != null) { _gdiCapture.FrameAvailable -= OnFrameAvailable; _gdiCapture.ErrorOccurred -= OnCaptureError; }
+            if (_dxgiCapture != null) { _dxgiCapture.FrameAvailable -= OnFrameAvailable; _dxgiCapture.ErrorOccurred -= OnDxgiCaptureError; }
+            if (_enhancedDxgiCapture != null) { _enhancedDxgiCapture.FrameAvailable -= OnEnhancedFrameAvailable; _enhancedDxgiCapture.ErrorOccurred -= OnEnhancedCaptureError; _enhancedDxgiCapture.DrmDetected -= OnDrmDetected; }
+            if (_chromeDrmCapture != null) { _chromeDrmCapture.FrameAvailable -= OnChromeFrameAvailable; _chromeDrmCapture.ErrorOccurred -= OnChromeCaptureError; }
+            if (_videoEncoder != null) _videoEncoder.EncodingCompleted -= OnEncodingCompleted;
+        }
 
         Cleanup();
 

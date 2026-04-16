@@ -38,6 +38,8 @@ public class EnhancedDxgiCaptureService : IDisposable
     private int _outputIndex = 0;
     private int _monitorWidth = 0;
     private int _monitorHeight = 0;
+    private int _monitorOffsetX = 0; // 모니터 좌상단 X (가상 데스크톱 좌표)
+    private int _monitorOffsetY = 0; // 모니터 좌상단 Y (가상 데스크톱 좌표)
     private readonly object _dxgiLock = new();
 
     // DRM 우회 모드 설정
@@ -158,17 +160,21 @@ public class EnhancedDxgiCaptureService : IDisposable
 
             // 화면 크기 가져오기
             var bounds = output.Description.DesktopBounds;
+            _monitorOffsetX = bounds.Left;
+            _monitorOffsetY = bounds.Top;
             _monitorWidth = bounds.Right - bounds.Left;
             _monitorHeight = bounds.Bottom - bounds.Top;
             _frameWidth = _monitorWidth;
             _frameHeight = _monitorHeight;
+
+            Debug.WriteLine($"[EnhancedDXGI] 모니터 {_outputIndex}: offset=({_monitorOffsetX},{_monitorOffsetY}), size={_monitorWidth}x{_monitorHeight}");
 
             // Custom Region인 경우 크기 조정
             if (_region.Type == CaptureRegionType.CustomRegion)
             {
                 _frameWidth = _region.Bounds.Width;
                 _frameHeight = _region.Bounds.Height;
-                Debug.WriteLine($"[EnhancedDXGI] CustomRegion - 모니터: {_monitorWidth}x{_monitorHeight}, 영역: {_frameWidth}x{_frameHeight}");
+                Debug.WriteLine($"[EnhancedDXGI] CustomRegion - 영역: {_frameWidth}x{_frameHeight}, 모니터로컬: ({_region.Bounds.X - _monitorOffsetX}, {_region.Bounds.Y - _monitorOffsetY})");
             }
 
             // Output Duplication 생성
@@ -417,8 +423,9 @@ public class EnhancedDxgiCaptureService : IDisposable
             _currentFrame = new byte[regionSize];
         }
 
-        int srcX = Math.Max(0, _region.Bounds.X);
-        int srcY = Math.Max(0, _region.Bounds.Y);
+        // 가상 데스크톱 좌표 → 모니터 로컬 좌표로 변환
+        int srcX = Math.Clamp(_region.Bounds.X - _monitorOffsetX, 0, _monitorWidth - 1);
+        int srcY = Math.Clamp(_region.Bounds.Y - _monitorOffsetY, 0, _monitorHeight - 1);
 
         // 각 행을 복사
         for (int y = 0; y < _frameHeight; y++)

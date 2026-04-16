@@ -251,10 +251,8 @@ public partial class MainWindow : Window
     // 화면 녹화 모드 버튼
     private void ScreenModeButton_Click(object sender, RoutedEventArgs e)
     {
-        Console.WriteLine("[MainWindow] ScreenModeButton_Click 호출됨");
         if (DataContext is MainViewModel vm && vm.SwitchToScreenModeCommand.CanExecute(null))
         {
-            Console.WriteLine("[MainWindow] SwitchToScreenModeCommand 실행");
             vm.SwitchToScreenModeCommand.Execute(null);
         }
     }
@@ -276,7 +274,7 @@ public partial class MainWindow : Window
     private void CaptureTargetCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
         if (DataContext is not MainViewModel vm) return;
-        if (CaptureTargetCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item) return;
+        if ((sender as System.Windows.Controls.ComboBox)?.SelectedItem is not System.Windows.Controls.ComboBoxItem item) return;
 
         var tag = item.Tag?.ToString();
         switch (tag)

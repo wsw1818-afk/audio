@@ -5,21 +5,26 @@
              StartupUri="Views/MainWindow.xaml">
     <Application.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- Fluent 다크 테마 (팔레트 + 공용 스타일) -->
+                <ResourceDictionary Source="/Themes/FluentDarkTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
             <!-- 컨버터 -->
             <converters:LevelToPercentWidthConverter x:Key="LevelToWidthConverter" MaxWidth="180"/>
             <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
             <converters:FormatToDisplayNameConverter x:Key="FormatToDisplayNameConverter"/>
             <converters:StateToEnabledConverter x:Key="StateToEnabledConverter"/>
 
-            <!-- 전역 색상 -->
-            <SolidColorBrush x:Key="PrimaryBrush" Color="#4CAF50"/>
-            <SolidColorBrush x:Key="SecondaryBrush" Color="#2196F3"/>
-            <SolidColorBrush x:Key="DangerBrush" Color="#F44336"/>
-            <SolidColorBrush x:Key="WarningBrush" Color="#FF9800"/>
-            <SolidColorBrush x:Key="BackgroundBrush" Color="#1E1E1E"/>
-            <SolidColorBrush x:Key="CardBrush" Color="#2D2D2D"/>
-            <SolidColorBrush x:Key="TextBrush" Color="#FFFFFF"/>
-            <SolidColorBrush x:Key="SubTextBrush" Color="#AAAAAA"/>
+            <!-- 구버전 키 별칭 (레거시 Brush 참조 호환성) -->
+            <SolidColorBrush x:Key="PrimaryBrush" Color="#30D158"/>
+            <SolidColorBrush x:Key="SecondaryBrush" Color="#0A84FF"/>
+            <SolidColorBrush x:Key="DangerBrush" Color="#FF453A"/>
+            <SolidColorBrush x:Key="WarningBrush" Color="#FF9F0A"/>
+            <SolidColorBrush x:Key="BackgroundBrush" Color="#0F0F0F"/>
+            <SolidColorBrush x:Key="CardBrush" Color="#1C1C1E"/>
+            <SolidColorBrush x:Key="TextBrush" Color="#F2F2F7"/>
+            <SolidColorBrush x:Key="SubTextBrush" Color="#9A9AA0"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

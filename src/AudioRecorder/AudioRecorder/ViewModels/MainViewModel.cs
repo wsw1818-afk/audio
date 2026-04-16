@@ -33,6 +33,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _playbackTimer;
     private readonly AppSettings _settings;
     private bool _disposed;
+    // 세그먼트 백그라운드 변환 취소용 (앱 종료 시 진행 중 변환을 신속히 중단)
+    private readonly CancellationTokenSource _segmentConvertCts = new();
+    private readonly List<Task> _segmentConvertTasks = new();
+    private readonly object _segmentConvertLock = new();
     private bool _isStoppingScreenRecording; // 화면 녹화 정지 진행 중 플래그
 
     // 녹음 상태
@@ -450,12 +454,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // 기본 캡처 영역 설정 (전체 화면)
         _selectedCaptureRegion = new CaptureRegion { Type = CaptureRegionType.FullScreen };
 
-        // 장치 목록 로드
-        LoadDevices();
-
-        // 최근 파일 목록 로드
-        LoadRecentFiles();
-
         // 초기 모드 UI 업데이트 (바인딩 초기화를 위해)
         OnPropertyChanged(nameof(IsAudioOnlyMode));
         OnPropertyChanged(nameof(IsScreenRecordingMode));
@@ -463,6 +461,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(FilteredRecentFiles));
         OnPropertyChanged(nameof(EmptyFilesMessage));
         OnPropertyChanged(nameof(HasNoFilteredFiles));
+
+        // 장치 목록 & 최근 파일을 비동기로 로드 (앱 시작 속도 개선)
+        _ = System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            LoadDevices();
+            LoadRecentFiles();
+        }, System.Windows.Threading.DispatcherPriority.Background);
     }
 
     private void LoadRecentFiles()
@@ -1102,6 +1107,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (recording == null)
             return;
 
+        // 확인 다이얼로그 - 데이터 손실 방지
+        var confirm = System.Windows.MessageBox.Show(
+            $"이 파일을 삭제하시겠습니까?\n\n{recording.FileName}\n\n삭제된 파일은 복구할 수 없습니다.",
+            "파일 삭제 확인",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No);
+
+        if (confirm != System.Windows.MessageBoxResult.Yes)
+            return;
+
         // 재생 중이면 중지
         if (IsPlaying && SelectedRecentFile == recording)
         {
@@ -1151,22 +1167,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    [RelayCommand]
-    private void OpenTranscription(RecordingInfo? recording)
-    {
-        if (recording == null || !File.Exists(recording.FilePath))
-            return;
-
-        if (!SpeechToTextService.IsSupportedAudioFile(recording.FilePath))
-        {
-            StatusText = $"녹취록 변환을 지원하지 않는 형식입니다: {Path.GetExtension(recording.FilePath)}";
-            return;
-        }
-
-        var window = new Views.TranscriptionWindow(recording.FilePath, _conversionService);
-        window.Owner = System.Windows.Application.Current.MainWindow;
-        window.ShowDialog();
-    }
 
     [RelayCommand]
     private async Task ConvertToMp3Async(RecordingInfo? recording)
@@ -1692,17 +1692,96 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnSegmentCompleted(object? sender, SegmentCompletedEventArgs e)
     {
+        var targetFormat = _recordingEngine.TargetFormat;
+        var segmentIndex = e.SegmentIndex;
+        var sizeMb = e.FileSize / (1024.0 * 1024);
+
+        // WAV 포맷이면 그냥 목록에 추가
+        if (targetFormat == RecordingFormat.WAV)
+        {
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                AddToRecentFiles(e.FilePath, e.Duration);
+                StatusText = $"녹음 중... (Part {segmentIndex} 저장: {sizeMb:F1}MB, Part {segmentIndex + 1} 녹음 중)";
+            });
+            return;
+        }
+
+        // WAV 외 포맷은 백그라운드에서 변환 후 추가
+        var localWavPath = e.FilePath;
+        var localDuration = e.Duration;
+        var audioFormat = targetFormat switch
+        {
+            RecordingFormat.FLAC => AudioFormat.FLAC,
+            RecordingFormat.MP3_128 => AudioFormat.MP3_128,
+            _ => AudioFormat.MP3_320
+        };
+        var targetExtension = targetFormat.GetExtension();
+        var formatName = targetFormat.GetDisplayName();
+
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
         {
-            // 완료된 세그먼트를 최근 파일 목록에 추가
-            AddToRecentFiles(e.FilePath, e.Duration);
-
-            var segmentName = Path.GetFileName(e.FilePath);
-            var sizeMb = e.FileSize / (1024.0 * 1024);
-            StatusText = $"녹음 중... (Part {e.SegmentIndex} 저장: {sizeMb:F1}MB, Part {e.SegmentIndex + 1} 녹음 중)";
-
-            System.Diagnostics.Debug.WriteLine($"[ViewModel] 세그먼트 완료: {segmentName} ({sizeMb:F1}MB)");
+            StatusText = $"녹음 중... (Part {segmentIndex} {formatName} 변환 중, Part {segmentIndex + 1} 녹음 중)";
         });
+
+        var token = _segmentConvertCts.Token;
+        var convertTask = Task.Run(async () =>
+        {
+            try
+            {
+                // WAV 파일이 닫힐 때까지 대기 (취소 감시)
+                var waitStart = DateTime.Now;
+                while ((DateTime.Now - waitStart).TotalSeconds < 10)
+                {
+                    token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        using var fs = new FileStream(localWavPath, FileMode.Open, FileAccess.Read, FileShare.None);
+                        break;
+                    }
+                    catch (IOException) { await Task.Delay(500, token); }
+                }
+
+                var finalFilePath = Path.ChangeExtension(localWavPath, targetExtension);
+                token.ThrowIfCancellationRequested();
+                var success = await _conversionService.ConvertAsync(localWavPath, audioFormat, finalFilePath);
+
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    if (success && File.Exists(finalFilePath))
+                    {
+                        try { File.Delete(localWavPath); } catch { }
+                        AddToRecentFiles(finalFilePath, localDuration);
+                        StatusText = $"녹음 중... (Part {segmentIndex} {formatName} 저장 완료, Part {segmentIndex + 1} 녹음 중)";
+                    }
+                    else
+                    {
+                        AddToRecentFiles(localWavPath, localDuration);
+                        StatusText = $"녹음 중... (Part {segmentIndex} 변환 실패, WAV로 저장)";
+                    }
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                // 앱 종료로 인한 취소 — 원본 WAV는 보존 (고아 파일 방지)
+                System.Diagnostics.Debug.WriteLine($"[SegmentConvert] Part {segmentIndex} 취소됨. WAV 보존: {localWavPath}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[SegmentConvert] 예외: {ex.Message}");
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    AddToRecentFiles(localWavPath, localDuration);
+                });
+            }
+        }, token);
+
+        lock (_segmentConvertLock)
+        {
+            _segmentConvertTasks.Add(convertTask);
+            // 주기적으로 완료된 Task 정리 (메모리 누수 방지)
+            _segmentConvertTasks.RemoveAll(t => t.IsCompleted);
+        }
     }
 
     private void OnScreenRecordingStateChanged(object? sender, RecordingStateChangedEventArgs e)
@@ -1977,6 +2056,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // 진행 중인 세그먼트 변환 취소 + 최대 3초 대기 (고아 WAV 방지)
+        try
+        {
+            _segmentConvertCts.Cancel();
+            Task[] pending;
+            lock (_segmentConvertLock)
+            {
+                pending = _segmentConvertTasks.ToArray();
+            }
+            if (pending.Length > 0)
+            {
+                try { Task.WaitAll(pending, TimeSpan.FromSeconds(3)); } catch { }
+            }
+        }
+        catch { }
+        finally
+        {
+            _segmentConvertCts.Dispose();
+        }
 
         SaveSettings();
 

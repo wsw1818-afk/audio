@@ -6,7 +6,7 @@
         Height="450"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
-        Background="#1E1E1E">
+        Background="{StaticResource BackgroundColor}">
 
     <Grid Margin="15">
         <Grid.RowDefinitions>
@@ -18,20 +18,20 @@
         <!-- 헤더 -->
         <StackPanel Grid.Row="0" Margin="0,0,0,15">
             <TextBlock Text="녹화할 모니터를 선택하세요"
-                       Foreground="White"
+                       Foreground="{StaticResource TextColor}"
                        FontSize="16"
                        FontWeight="SemiBold"/>
             <TextBlock Text="연결된 모니터 목록입니다"
-                       Foreground="#AAAAAA"
+                       Foreground="{StaticResource SubTextColor}"
                        FontSize="12"
                        Margin="0,5,0,0"/>
         </StackPanel>
 
         <!-- 모니터 목록 -->
         <Border Grid.Row="1"
-                Background="#2D2D2D"
+                Background="{StaticResource CardColor}"
                 CornerRadius="8"
-                BorderBrush="#3D3D3D"
+                BorderBrush="{StaticResource BorderColor}"
                 BorderThickness="1">
             <ListBox x:Name="MonitorList"
                      Background="Transparent"
@@ -43,14 +43,14 @@
                     <Style TargetType="ListBoxItem">
                         <Setter Property="Padding" Value="15"/>
                         <Setter Property="Margin" Value="5"/>
-                        <Setter Property="Background" Value="#3D3D3D"/>
+                        <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
                         <Setter Property="Foreground" Value="White"/>
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="ListBoxItem">
                                     <Border x:Name="Bd"
                                             Background="{TemplateBinding Background}"
-                                            BorderBrush="#4D4D4D"
+                                            BorderBrush="{StaticResource BorderColor}"
                                             BorderThickness="1"
                                             Padding="{TemplateBinding Padding}"
                                             CornerRadius="8">
@@ -58,18 +58,18 @@
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="#4CAF50"/>
-                                            <Setter TargetName="Bd" Property="BorderBrush" Value="#66BB6A"/>
+                                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PrimaryColor}"/>
+                                            <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource PrimaryColor}"/>
                                         </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="#4D4D4D"/>
+                                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource BorderColor}"/>
                                         </Trigger>
                                         <MultiTrigger>
                                             <MultiTrigger.Conditions>
                                                 <Condition Property="IsSelected" Value="True"/>
                                                 <Condition Property="IsMouseOver" Value="True"/>
                                             </MultiTrigger.Conditions>
-                                            <Setter TargetName="Bd" Property="Background" Value="#66BB6A"/>
+                                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PrimaryColor}"/>
                                         </MultiTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -88,7 +88,7 @@
 
                             <!-- 모니터 아이콘 -->
                             <Border Grid.Column="0"
-                                    Background="#2D2D2D"
+                                    Background="{StaticResource CardColor}"
                                     CornerRadius="6"
                                     Padding="10"
                                     Margin="0,0,15,0">
@@ -100,25 +100,25 @@
                                 <TextBlock Text="{Binding DisplayName}"
                                            FontSize="14"
                                            FontWeight="SemiBold"
-                                           Foreground="White"/>
+                                           Foreground="{StaticResource TextColor}"/>
                                 <TextBlock Text="{Binding Resolution}"
                                            FontSize="12"
-                                           Foreground="#AAAAAA"
+                                           Foreground="{StaticResource SubTextColor}"
                                            Margin="0,4,0,0"/>
                                 <TextBlock Text="{Binding Position}"
                                            FontSize="11"
-                                           Foreground="#888888"
+                                           Foreground="{StaticResource SubTextColor}"
                                            Margin="0,2,0,0"/>
                             </StackPanel>
 
                             <!-- Primary 표시 -->
                             <Border Grid.Column="2"
-                                    Background="#FFB347"
+                                    Background="{StaticResource AccentBrush}"
                                     CornerRadius="4"
                                     Padding="8,4"
                                     VerticalAlignment="Center"
                                     Visibility="{Binding IsPrimaryVisibility}">
-                                <TextBlock Text="기본" FontSize="11" Foreground="#1E1E1E" FontWeight="SemiBold"/>
+                                <TextBlock Text="기본" FontSize="11" Foreground="{StaticResource BackgroundColor}" FontWeight="SemiBold"/>
                             </Border>
                         </Grid>
                     </DataTemplate>
@@ -137,8 +137,8 @@
                     Height="32"
                     Margin="0,0,10,0"
                     Click="CancelButton_Click"
-                    Background="#3D3D3D"
-                    Foreground="White"
+                    Background="{StaticResource SurfaceColor}"
+                    Foreground="{StaticResource TextColor}"
                     BorderThickness="0">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
@@ -156,8 +156,8 @@
                     Width="80"
                     Height="32"
                     Click="SelectButton_Click"
-                    Background="#4CAF50"
-                    Foreground="White"
+                    Background="{StaticResource PrimaryColor}"
+                    Foreground="{StaticResource TextColor}"
                     BorderThickness="0"
                     IsDefault="True">
                 <Button.Template>

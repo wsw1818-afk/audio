@@ -16,7 +16,7 @@
                  HorizontalAlignment="Center"
                  VerticalAlignment="Center">
             <Ellipse.Fill>
-                <SolidColorBrush Color="#1A1A1A" Opacity="0.9"/>
+                <SolidColorBrush Color="#1C1C1E" Opacity="0.92"/>
             </Ellipse.Fill>
         </Ellipse>
 
@@ -25,7 +25,7 @@
                  Width="230" Height="230"
                  HorizontalAlignment="Center"
                  VerticalAlignment="Center"
-                 Stroke="#FF5555"
+                 Stroke="{StaticResource DangerColor}"
                  StrokeThickness="8"
                  RenderTransformOrigin="0.5,0.5">
             <Ellipse.RenderTransform>
@@ -44,14 +44,14 @@
                    Text="3"
                    FontSize="100"
                    FontWeight="Bold"
-                   Foreground="White"
+                   Foreground="{StaticResource TextColor}"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"/>
 
         <!-- 설명 텍스트 -->
         <TextBlock Text="녹화 시작까지"
                    FontSize="16"
-                   Foreground="#AAAAAA"
+                   Foreground="{StaticResource SubTextColor}"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    Margin="0,100,0,0"/>

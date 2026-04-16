@@ -54,10 +54,23 @@ public class VideoEncoderService : IDisposable
         FFmpegPath = FindFFmpeg();
     }
 
+    // FindFFmpeg 결과를 프로세스 수명 동안 1회만 탐색 (UI 폴링 대비 캐싱)
+    private static readonly Lazy<string> _cachedFFmpegPath = new(FindFFmpegUncached, isThreadSafe: true);
+
     /// <summary>
-    /// FFmpeg 경로 찾기
+    /// FFmpeg가 시스템에 설치되었는지 즉시 확인 (인스턴스 없이 호출 가능, 캐시됨)
     /// </summary>
-    private static string FindFFmpeg()
+    public static bool IsFFmpegInstalled() => !string.IsNullOrEmpty(_cachedFFmpegPath.Value);
+
+    /// <summary>
+    /// FFmpeg 경로 찾기 (캐시된 결과 반환)
+    /// </summary>
+    public static string FindFFmpeg() => _cachedFFmpegPath.Value;
+
+    /// <summary>
+    /// 실제 FFmpeg 탐색 (PATH 순회, Lazy 내부에서만 호출)
+    /// </summary>
+    private static string FindFFmpegUncached()
     {
         // 1. 앱 폴더
         var appDir = AppDomain.CurrentDomain.BaseDirectory;

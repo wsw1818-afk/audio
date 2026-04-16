@@ -6,7 +6,7 @@
         Height="450"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
-        Background="#1E1E1E">
+        Background="{StaticResource BackgroundColor}">
 
     <Grid Margin="15">
         <Grid.RowDefinitions>
@@ -18,20 +18,20 @@
         <!-- 헤더 -->
         <StackPanel Grid.Row="0" Margin="0,0,0,15">
             <TextBlock Text="녹화할 창을 선택하세요"
-                       Foreground="White"
+                       Foreground="{StaticResource TextColor}"
                        FontSize="16"
                        FontWeight="SemiBold"/>
             <TextBlock Text="현재 열려있는 창 목록입니다"
-                       Foreground="#AAAAAA"
+                       Foreground="{StaticResource SubTextColor}"
                        FontSize="12"
                        Margin="0,5,0,0"/>
         </StackPanel>
 
         <!-- 창 목록 -->
         <Border Grid.Row="1"
-                Background="#2D2D2D"
+                Background="{StaticResource CardColor}"
                 CornerRadius="8"
-                BorderBrush="#3D3D3D"
+                BorderBrush="{StaticResource BorderColor}"
                 BorderThickness="1">
             <ListBox x:Name="WindowList"
                      Background="Transparent"
@@ -50,7 +50,7 @@
                                 <ControlTemplate TargetType="ListBoxItem">
                                     <Border x:Name="Bd"
                                             Background="{TemplateBinding Background}"
-                                            BorderBrush="#3D3D3D"
+                                            BorderBrush="{StaticResource BorderColor}"
                                             BorderThickness="0,0,0,1"
                                             Padding="{TemplateBinding Padding}"
                                             CornerRadius="4">
@@ -58,17 +58,17 @@
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="#4CAF50"/>
+                                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PrimaryColor}"/>
                                         </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="#3D3D3D"/>
+                                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource SurfaceColor}"/>
                                         </Trigger>
                                         <MultiTrigger>
                                             <MultiTrigger.Conditions>
                                                 <Condition Property="IsSelected" Value="True"/>
                                                 <Condition Property="IsMouseOver" Value="True"/>
                                             </MultiTrigger.Conditions>
-                                            <Setter TargetName="Bd" Property="Background" Value="#66BB6A"/>
+                                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PrimaryColor}"/>
                                         </MultiTrigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -87,16 +87,16 @@
                                 <TextBlock Text="{Binding Title}"
                                            FontSize="13"
                                            TextTrimming="CharacterEllipsis"
-                                           Foreground="White"/>
+                                           Foreground="{StaticResource TextColor}"/>
                                 <TextBlock Text="{Binding ProcessName}"
                                            FontSize="11"
-                                           Foreground="#AAAAAA"
+                                           Foreground="{StaticResource SubTextColor}"
                                            Margin="0,2,0,0"/>
                             </StackPanel>
                             <TextBlock Grid.Column="1"
                                        Text="{Binding Bounds, StringFormat='{}{0}'}"
                                        FontSize="11"
-                                       Foreground="#888888"
+                                       Foreground="{StaticResource SubTextColor}"
                                        VerticalAlignment="Center"/>
                         </Grid>
                     </DataTemplate>
@@ -115,8 +115,8 @@
                     Height="32"
                     Margin="0,0,10,0"
                     Click="RefreshButton_Click"
-                    Background="#3D3D3D"
-                    Foreground="White"
+                    Background="{StaticResource SurfaceColor}"
+                    Foreground="{StaticResource TextColor}"
                     BorderThickness="0">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
@@ -135,8 +135,8 @@
                     Height="32"
                     Margin="0,0,10,0"
                     Click="CancelButton_Click"
-                    Background="#3D3D3D"
-                    Foreground="White"
+                    Background="{StaticResource SurfaceColor}"
+                    Foreground="{StaticResource TextColor}"
                     BorderThickness="0">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
@@ -154,8 +154,8 @@
                     Width="80"
                     Height="32"
                     Click="SelectButton_Click"
-                    Background="#4CAF50"
-                    Foreground="White"
+                    Background="{StaticResource PrimaryColor}"
+                    Foreground="{StaticResource TextColor}"
                     BorderThickness="0"
                     IsDefault="True">
                 <Button.Template>
