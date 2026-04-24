@@ -7,8 +7,8 @@
         xmlns:conv="clr-namespace:AudioRecorder.Converters"
         mc:Ignorable="d"
         Title="AudioRecorder Pro"
-        Height="680" Width="1080"
-        MinHeight="560" MinWidth="860"
+        Height="540" Width="900"
+        MinHeight="460" MinWidth="720"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -79,7 +79,7 @@
                     <Grid>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="18,0,0,0">
                             <TextBlock Text="🎙" FontSize="14" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
-                            <TextBlock Text="AudioRecorder Pro" FontSize="12" FontWeight="SemiBold"
+                            <TextBlock Text="AudioRecorder Pro v1.2.1" FontSize="12" FontWeight="SemiBold"
                                        Foreground="{StaticResource TextColor}" VerticalAlignment="Center" Margin="8,0,0,0"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -104,7 +104,7 @@
                         <!-- 하단: 설정 -->
                         <StackPanel VerticalAlignment="Bottom" Margin="0,0,0,12">
                             <Button Style="{StaticResource SidebarButtonStyle}" Content="⚙"
-                                    Command="{Binding ToggleOptionsCommand}" ToolTip="설정"/>
+                                    Click="SettingsButton_Click" ToolTip="설정"/>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -122,40 +122,66 @@
                     </Grid.RowDefinitions>
 
                     <!-- ============ HERO (Left) ============ -->
-                    <StackPanel Grid.Row="0" Grid.Column="0" Margin="8,16,24,0">
-                        <TextBlock Text="오늘," FontSize="26" FontWeight="Bold"
+                    <StackPanel Grid.Row="0" Grid.Column="0" Margin="8,8,24,0">
+                        <TextBlock Text="오늘," FontSize="22" FontWeight="Bold"
                                    Foreground="{StaticResource TextColor}" Margin="0,0,0,2"/>
-                        <TextBlock Text="무엇을 녹음할까요?" FontSize="26" FontWeight="Bold"
-                                   Foreground="{StaticResource TextColor}"/>
-                        <TextBlock Text="고음질로 모든 순간을 기록하세요."
-                                   FontSize="12"
+                        <!-- 오디오 모드: "녹음할까요?" / 화면 모드: "녹화할까요?" -->
+                        <TextBlock FontSize="22" FontWeight="Bold"
+                                   Foreground="{StaticResource TextColor}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="무엇을 녹음할까요?"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsScreenRecordingMode}" Value="True">
+                                            <Setter Property="Text" Value="무엇을 녹화할까요?"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock FontSize="12"
                                    Foreground="{StaticResource SubTextColor}"
-                                   Margin="0,8,0,0"/>
+                                   Margin="0,8,0,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value="고음질로 모든 순간을 기록하세요."/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsScreenRecordingMode}" Value="True">
+                                            <Setter Property="Text" Value="화면과 소리를 함께 녹화하세요."/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                     </StackPanel>
 
-                    <!-- ============ 녹음 시작 PILL (Left, row 1) ============ -->
-                    <StackPanel Grid.Row="1" Grid.Column="0" Margin="8,28,24,0"
+                    <!-- ============ 녹음/녹화 컨트롤 (Left, row 1) ============ -->
+                    <StackPanel Grid.Row="1" Grid.Column="0" Margin="8,20,24,0"
                                 HorizontalAlignment="Left" Orientation="Horizontal">
+                        <!-- 시작 버튼 (정지 상태에서만 보임) -->
                         <Button Style="{StaticResource RecordPillButtonStyle}"
                                 Command="{Binding StartRecordingCommand}">
                             <StackPanel Orientation="Horizontal">
                                 <Ellipse Width="12" Height="12" Fill="{StaticResource TextColor}" Margin="0,0,12,0"
                                          VerticalAlignment="Center"/>
-                                <!-- 오디오 모드: "녹음 시작" -->
                                 <TextBlock Text="녹음 시작" VerticalAlignment="Center"
                                            Visibility="{Binding IsAudioOnlyMode, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                                <!-- 화면 모드: "녹화 시작" -->
                                 <TextBlock Text="녹화 시작" VerticalAlignment="Center"
                                            Visibility="{Binding IsScreenRecordingMode, Converter={StaticResource BoolToVisibilityConverter}}"/>
                             </StackPanel>
                         </Button>
-                        <Button Style="{StaticResource GlassIconButtonStyle}" Content="⏸"
-                                Command="{Binding PauseRecordingCommand}" Margin="12,0,0,0" ToolTip="일시정지"/>
-                        <Button Style="{StaticResource GlassIconButtonStyle}" Content="⏹"
-                                Command="{Binding StopRecordingCommand}" Margin="8,0,0,0" ToolTip="정지"/>
+                        <!-- 일시정지 (녹음 중에만 활성) -->
+                        <Button Style="{StaticResource GlassIconButtonStyle}"
+                                Content="⏸" ToolTip="일시정지" Margin="12,0,0,0"
+                                Command="{Binding PauseRecordingCommand}"/>
+                        <!-- 정지 -->
+                        <Button Style="{StaticResource GlassIconButtonStyle}"
+                                Content="⏹" ToolTip="정지" Margin="8,0,0,0"
+                                Command="{Binding StopRecordingCommand}"/>
+                        <!-- 경과 시간 -->
                         <TextBlock Text="{Binding ElapsedTime}" FontSize="18" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextColor}" VerticalAlignment="Center"
-                                   Margin="18,0,0,0" FontFamily="Consolas"/>
+                                   Margin="18,0,0,0" FontFamily="{StaticResource MonoFont}"/>
                     </StackPanel>
 
                     <!-- ============ 모드 카드 (Right, rows 0-1 spanned) — 모드 전환 단일 책임 ============ -->
@@ -261,7 +287,7 @@
                     </StackPanel>
 
                     <!-- ============ 최근 녹음 LIST (rows 2 span all cols) ============ -->
-                    <Grid Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="8,28,0,0">
+                    <Grid Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="8,16,0,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>

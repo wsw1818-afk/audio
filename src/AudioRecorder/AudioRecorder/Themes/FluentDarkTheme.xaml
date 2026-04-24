@@ -36,9 +36,152 @@
     <FontFamily x:Key="PrimaryFont">Pretendard, Malgun Gothic, Segoe UI, sans-serif</FontFamily>
     <FontFamily x:Key="MonoFont">Consolas, D2Coding, Menlo, monospace</FontFamily>
 
-    <!-- 전역 TextBlock / Button / ComboBox / CheckBox / TextBox에 기본 폰트 적용 -->
+    <!-- 전역 TextBlock - 폰트 + 다크 테마 기본 Foreground -->
     <Style TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource PrimaryFont}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+    </Style>
+
+    <!-- 전역 Label - 다크 테마 -->
+    <Style TargetType="Label">
+        <Setter Property="FontFamily" Value="{StaticResource PrimaryFont}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
+    <!-- ContentControl 계열의 기본 색 (CheckBox/ComboBoxItem 내부 ContentPresenter가 상속받음) -->
+    <Style TargetType="ContentControl">
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+    </Style>
+
+    <!-- 기본 ScrollViewer - 배경 투명(부모 배경 비침). 흰색 SystemColors.WindowBrush 차단 -->
+    <Style TargetType="ScrollViewer">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
+    <!-- 기본 Button - Aero Chrome 완전 제거 -->
+    <Style TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="12,6"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="8"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"
+                                          TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{StaticResource BorderColor}"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.35"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- 기본 ToggleButton - Aero Chrome 제거 (ComboBox 내부 등에서 사용) -->
+    <Style TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 기본 RepeatButton - Aero Chrome 제거 (Slider/ScrollBar 내부) -->
+    <Style TargetType="RepeatButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RepeatButton">
+                    <Border Background="{TemplateBinding Background}"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 기본 Thumb - Aero Chrome 제거 (Slider/ScrollBar 내부) -->
+    <Style TargetType="Thumb">
+        <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Ellipse Fill="{TemplateBinding Background}" Width="14" Height="14"/>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 기본 ToolTip - 다크 테마 (WPF 기본 흰 Aero 툴팁 차단) -->
+    <Style TargetType="ToolTip">
+        <Setter Property="Background" Value="{StaticResource CardColor}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="10,6"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="HasDropShadow" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToolTip">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="8"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 기본 ContextMenu / MenuItem 다크 -->
+    <Style TargetType="ContextMenu">
+        <Setter Property="Background" Value="{StaticResource CardColor}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="4"/>
+    </Style>
+    <Style TargetType="MenuItem">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="Padding" Value="10,6"/>
+    </Style>
+    <Style TargetType="Separator">
+        <Setter Property="Background" Value="{StaticResource BorderColor}"/>
+        <Setter Property="Height" Value="1"/>
+        <Setter Property="Margin" Value="0,4"/>
+    </Style>
+
+    <!-- Popup 내부 배경 기본 (WPF 기본 흰색 Popup Placement 차단) -->
+    <Style TargetType="Border" x:Key="PopupCardBorder">
+        <Setter Property="Background" Value="{StaticResource CardColor}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="8"/>
     </Style>
 
     <!-- ============ RADIUS TOKENS (r-sm 8 / r-md 14 / r-pill 9999) ============ -->
@@ -193,8 +336,8 @@
         <Setter Property="Height" Value="42"/>
         <Setter Property="FontSize" Value="16"/>
         <Setter Property="Foreground" Value="{StaticResource SubTextColor}"/>
-        <Setter Property="Background" Value="{StaticResource GlassSurfaceBrush}"/>
-        <Setter Property="BorderBrush" Value="{StaticResource GlassBorderBrush}"/>
+        <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
@@ -336,7 +479,150 @@
         </Style.Triggers>
     </Style>
 
-    <!-- 모던 슬라이더 스타일 -->
+    <!-- 기본 TextBox -->
+    <Style TargetType="TextBox">
+        <Setter Property="Background" Value="{StaticResource SurfaceColor}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="CaretBrush" Value="{StaticResource TextColor}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="6">
+                        <ScrollViewer x:Name="PART_ContentHost"
+                                      Margin="{TemplateBinding Padding}"
+                                      VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 기본 TabControl - 콘텐츠 영역도 다크로 강제 렌더링 -->
+    <Style TargetType="TabControl">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <!-- 탭 헤더 줄 -->
+                        <Border Grid.Row="0" BorderBrush="{StaticResource BorderColor}" BorderThickness="0,0,0,1">
+                            <TabPanel x:Name="HeaderPanel" Panel.ZIndex="1" IsItemsHost="True"
+                                      Background="Transparent"/>
+                        </Border>
+                        <!-- 콘텐츠 영역 (다크 배경 강제) -->
+                        <Border Grid.Row="1"
+                                Background="{StaticResource BackgroundColor}"
+                                BorderBrush="{StaticResource BorderColor}" BorderThickness="0">
+                            <ContentPresenter x:Name="PART_SelectedContentHost"
+                                              ContentSource="SelectedContent"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 기본 TabItem - 눌리면 앰버 밑줄 -->
+    <Style TargetType="TabItem">
+        <Setter Property="Foreground" Value="{StaticResource SubTextColor}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Padding" Value="16,10"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Grid>
+                        <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter ContentSource="Header"
+                                              HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              TextBlock.Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <Border x:Name="SelectedBar" Background="{StaticResource AccentBrush}"
+                                Height="2" VerticalAlignment="Bottom" Visibility="Collapsed"/>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                            <Setter TargetName="SelectedBar" Property="Visibility" Value="Visible"/>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 기본 Slider 스타일 (SettingsWindow 등에서 StaticResource 명시 없이 사용되는 곳용) -->
+    <Style TargetType="Slider">
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+        <Setter Property="Background" Value="{StaticResource BorderColor}"/>
+        <Setter Property="IsMoveToPointEnabled" Value="True"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Slider">
+                    <Grid VerticalAlignment="Center">
+                        <Border Background="{StaticResource BorderColor}" CornerRadius="3" Height="6"
+                                VerticalAlignment="Center"/>
+                        <Track x:Name="PART_Track" Height="6">
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="Slider.DecreaseLarge">
+                                    <RepeatButton.Template>
+                                        <ControlTemplate TargetType="RepeatButton">
+                                            <Border Background="{StaticResource AccentBrush}" CornerRadius="3" Height="6"/>
+                                        </ControlTemplate>
+                                    </RepeatButton.Template>
+                                </RepeatButton>
+                            </Track.DecreaseRepeatButton>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="Slider.IncreaseLarge">
+                                    <RepeatButton.Template>
+                                        <ControlTemplate TargetType="RepeatButton">
+                                            <Border Background="Transparent" Height="6"/>
+                                        </ControlTemplate>
+                                    </RepeatButton.Template>
+                                </RepeatButton>
+                            </Track.IncreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb Width="16" Height="16">
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Ellipse Fill="{StaticResource AccentBrush}"
+                                                     Stroke="{StaticResource TextColor}" StrokeThickness="2"
+                                                     Width="16" Height="16"/>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- 모던 슬라이더 스타일 (기존 호환용 key) -->
     <Style x:Key="ModernSliderStyle" TargetType="Slider">
         <Setter Property="Height" Value="6"/>
         <Setter Property="Background" Value="{StaticResource BorderColor}"/>
@@ -394,7 +680,8 @@
                                                   ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                                   VerticalAlignment="Center"
                                                   HorizontalAlignment="Left"
-                                                  TextBlock.Foreground="{StaticResource TextColor}"/>
+                                                  TextBlock.Foreground="{StaticResource TextColor}"
+                                                  TextElement.Foreground="{StaticResource TextColor}"/>
                                 <TextBlock Grid.Column="1" Text="▼" FontSize="8"
                                            Foreground="{StaticResource SubTextColor}"
                                            VerticalAlignment="Center"
@@ -405,10 +692,14 @@
                                       IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                       Focusable="false"
                                       ClickMode="Press"
-                                      Background="Transparent"
-                                      BorderThickness="0"
                                       HorizontalAlignment="Stretch"
-                                      VerticalAlignment="Stretch"/>
+                                      VerticalAlignment="Stretch">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="Transparent"/>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
                         <Popup x:Name="Popup"
                                IsOpen="{TemplateBinding IsDropDownOpen}"
                                AllowsTransparency="True"
@@ -444,7 +735,8 @@
                     <Border x:Name="Bd"
                             Background="{TemplateBinding Background}"
                             Padding="{TemplateBinding Padding}">
-                        <ContentPresenter TextBlock.Foreground="{TemplateBinding Foreground}"/>
+                        <ContentPresenter TextBlock.Foreground="{TemplateBinding Foreground}"
+                                          TextElement.Foreground="{TemplateBinding Foreground}"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
@@ -490,7 +782,8 @@
                                                   ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                                   VerticalAlignment="Center"
                                                   HorizontalAlignment="Left"
-                                                  TextBlock.Foreground="{StaticResource TextColor}"/>
+                                                  TextBlock.Foreground="{StaticResource TextColor}"
+                                                  TextElement.Foreground="{StaticResource TextColor}"/>
                                 <TextBlock Grid.Column="1" Text="▼" FontSize="8"
                                            Foreground="{StaticResource SubTextColor}"
                                            VerticalAlignment="Center"
@@ -501,10 +794,14 @@
                                       IsChecked="{Binding Path=IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                       Focusable="false"
                                       ClickMode="Press"
-                                      Background="Transparent"
-                                      BorderThickness="0"
                                       HorizontalAlignment="Stretch"
-                                      VerticalAlignment="Stretch"/>
+                                      VerticalAlignment="Stretch">
+                            <ToggleButton.Template>
+                                <ControlTemplate TargetType="ToggleButton">
+                                    <Border Background="Transparent"/>
+                                </ControlTemplate>
+                            </ToggleButton.Template>
+                        </ToggleButton>
                         <Popup x:Name="Popup"
                                IsOpen="{TemplateBinding IsDropDownOpen}"
                                AllowsTransparency="True"
@@ -551,7 +848,9 @@
                                        VerticalAlignment="Center"
                                        Visibility="Collapsed"/>
                         </Border>
-                        <ContentPresenter VerticalAlignment="Center"/>
+                        <ContentPresenter VerticalAlignment="Center"
+                                          TextElement.Foreground="{StaticResource TextColor}"
+                                          TextElement.FontFamily="{StaticResource PrimaryFont}"/>
                     </StackPanel>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsChecked" Value="True">

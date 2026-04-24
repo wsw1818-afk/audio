@@ -32,13 +32,15 @@ public enum AudioFormat
 /// </summary>
 public class AudioConversionService
 {
-    private string? _ffmpegPath;
     private readonly string _logPath;
 
     public event EventHandler<AudioConversionProgressEventArgs>? ProgressChanged;
     public event EventHandler<AudioConversionCompletedEventArgs>? ConversionCompleted;
 
-    public bool IsFFmpegAvailable => FindFFmpeg() != null;
+    // 프로세스 수명 동안 FFmpeg 경로 1회만 탐색 (UI 폴링 비용 제거)
+    private static readonly Lazy<string?> _cachedFFmpegPath = new(FindFFmpegUncached, isThreadSafe: true);
+
+    public bool IsFFmpegAvailable => _cachedFFmpegPath.Value != null;
 
     public AudioConversionService()
     {
@@ -59,19 +61,17 @@ public class AudioConversionService
         catch (Exception ex) { Debug.WriteLine($"[AudioConversion] {ex.Message}"); }
     }
 
-    public string? FindFFmpeg()
-    {
-        if (_ffmpegPath != null && File.Exists(_ffmpegPath))
-            return _ffmpegPath;
+    // 캐시된 경로 반환 (Lazy<>로 프로세스당 1회만 탐색)
+    public string? FindFFmpeg() => _cachedFFmpegPath.Value;
 
+    // 실제 탐색 로직 (Lazy 초기화 시 1회만 호출)
+    private static string? FindFFmpegUncached()
+    {
         // 1. 앱 폴더에서 찾기
         var appDir = AppDomain.CurrentDomain.BaseDirectory;
         var localPath = Path.Combine(appDir, "ffmpeg.exe");
         if (File.Exists(localPath))
-        {
-            _ffmpegPath = localPath;
-            return _ffmpegPath;
-        }
+            return localPath;
 
         // 2. PATH 환경변수에서 찾기
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
@@ -79,10 +79,7 @@ public class AudioConversionService
         {
             var ffmpegInPath = Path.Combine(dir, "ffmpeg.exe");
             if (File.Exists(ffmpegInPath))
-            {
-                _ffmpegPath = ffmpegInPath;
-                return _ffmpegPath;
-            }
+                return ffmpegInPath;
         }
 
         // 3. 일반적인 설치 경로 확인
@@ -98,10 +95,7 @@ public class AudioConversionService
         foreach (var path in commonPaths)
         {
             if (File.Exists(path))
-            {
-                _ffmpegPath = path;
-                return _ffmpegPath;
-            }
+                return path;
         }
 
         return null;

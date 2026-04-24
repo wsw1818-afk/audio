@@ -239,6 +239,16 @@ public partial class MainWindow : Window
         Close();
     }
 
+    // 설정 버튼 (⚙)
+    private void SettingsButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            var settings = new SettingsWindow(vm) { Owner = this };
+            settings.ShowDialog();
+        }
+    }
+
     // 오디오 녹음 모드 버튼
     private void AudioModeButton_Click(object sender, RoutedEventArgs e)
     {

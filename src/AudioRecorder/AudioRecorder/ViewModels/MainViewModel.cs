@@ -328,7 +328,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // 빈 상태 메시지
     public string EmptyFilesMessage => IsScreenRecordingMode ? "녹화 파일이 없습니다" : "녹음 파일이 없습니다";
-    public bool HasNoFilteredFiles => !FilteredRecentFiles.Any();
+    // 캐시 리스트의 Count만 체크 — 이중 필터링 방지 (FilteredRecentFiles 게터 우회)
+    public bool HasNoFilteredFiles => (_cachedFilteredFiles ?? (IEnumerable<RecordingInfo>)FilteredRecentFiles).Count() == 0;
 
     // 재생 상태
     [ObservableProperty]
@@ -462,12 +463,40 @@ public partial class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(EmptyFilesMessage));
         OnPropertyChanged(nameof(HasNoFilteredFiles));
 
-        // 장치 목록 & 최근 파일을 비동기로 로드 (앱 시작 속도 개선)
-        _ = System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        // UI 스레드 외부에서 COM 장치 열거 + 파일 I/O 수행 → 창이 즉시 뜸
+        _ = Task.Run(() =>
         {
-            LoadDevices();
-            LoadRecentFiles();
-        }, System.Windows.Threading.DispatcherPriority.Background);
+            try
+            {
+                // 1) DeviceManager 미리 준비 (COM 호출 수백ms, 결과만 받아 UI로 반영)
+                var inputs = _deviceManager.GetInputDevices();
+                var outputs = _deviceManager.GetOutputDevices();
+
+                // 2) UI 스레드에서 ObservableCollection 일괄 반영
+                System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
+                {
+                    InputDevices.Clear();
+                    foreach (var d in inputs)
+                    {
+                        InputDevices.Add(d);
+                        if (d.IsDefault) SelectedInputDevice = d;
+                    }
+                    OutputDevices.Clear();
+                    foreach (var d in outputs)
+                    {
+                        OutputDevices.Add(d);
+                        if (d.IsDefault) SelectedOutputDevice = d;
+                    }
+
+                    // 최근 파일 로드 (JSON 파일, 100ms 이내)
+                    LoadRecentFiles();
+                }, System.Windows.Threading.DispatcherPriority.Background);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MainViewModel] 비동기 초기화 실패: {ex.Message}");
+            }
+        });
     }
 
     private void LoadRecentFiles()
@@ -1629,10 +1658,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string _lastMicLevelDbText = "-∞ dB";
     private string _lastSystemLevelDbText = "-∞ dB";
     private int _lastMicLevelDbRounded = -100;
+    // UI 업데이트 쓰로틀 (레벨 미터가 초당 수백번 호출되어 Dispatcher 큐 포화 방지)
+    private long _lastLevelUiUpdateTicks;
+    private const long LevelUiUpdateIntervalTicks = TimeSpan.TicksPerMillisecond * 50; // 50ms = 20fps
     private int _lastSystemLevelDbRounded = -100;
 
     private void OnLevelUpdated(object? sender, LevelEventArgs e)
     {
+        // 50ms 쓰로틀: 오디오 콜백이 초당 수백번 호출되어도 UI는 20fps로 제한
+        var nowTicks = DateTime.UtcNow.Ticks;
+        if (nowTicks - _lastLevelUiUpdateTicks < LevelUiUpdateIntervalTicks)
+            return;
+        _lastLevelUiUpdateTicks = nowTicks;
+
         // 문자열 생성은 메인 스레드 외부에서 미리 처리
         int micDbRounded = e.MicLevelDb <= -60 ? -100 : (int)e.MicLevelDb;
         int sysDbRounded = e.SystemLevelDb <= -60 ? -100 : (int)e.SystemLevelDb;
