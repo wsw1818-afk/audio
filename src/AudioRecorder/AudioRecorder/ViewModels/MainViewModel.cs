@@ -490,7 +490,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
                     // 최근 파일 로드 (JSON 파일, 100ms 이내)
                     LoadRecentFiles();
-                }, System.Windows.Threading.DispatcherPriority.Background);
+                }, System.Windows.Threading.DispatcherPriority.DataBind);
             }
             catch (Exception ex)
             {
@@ -945,8 +945,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
 
         RecentFiles.Insert(0, recording);
-        if (RecentFiles.Count > 10)
-            RecentFiles.RemoveAt(RecentFiles.Count - 1);
+        TrimRecentFiles();
 
         // 필터링된 목록 업데이트 (캐시 무효화)
         _cachedFilteredFiles = null;
@@ -960,6 +959,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             FileInfo = $"저장됨: {recording.FileName} ({recording.FileSize / 1024.0:F1} KB)";
 
         SaveRecentFiles();
+    }
+
+    private void TrimRecentFiles()
+    {
+        var maxRecentFiles = Math.Clamp(_settings.MaxRecentFiles, 1, 100);
+        while (RecentFiles.Count > maxRecentFiles)
+        {
+            RecentFiles.RemoveAt(RecentFiles.Count - 1);
+        }
     }
 
     private bool CanStopRecording() => RecordingState == RecordingState.Recording || RecordingState == RecordingState.Paused;
@@ -1514,6 +1522,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         FileSize = fileInfo.Length
                     };
                     RecentFiles.Insert(0, compressedInfo);
+                    TrimRecentFiles();
                     _cachedFilteredFiles = null;
                     OnPropertyChanged(nameof(FilteredRecentFiles));
                     OnPropertyChanged(nameof(HasNoFilteredFiles));
@@ -1698,7 +1707,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var sysLevel = e.SystemLevel;
 
         System.Windows.Application.Current?.Dispatcher.BeginInvoke(
-            System.Windows.Threading.DispatcherPriority.Background,
+            System.Windows.Threading.DispatcherPriority.DataBind,
             () =>
             {
                 MicLevel = micLevel;
@@ -1856,8 +1865,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 };
 
                 RecentFiles.Insert(0, recording);
-                if (RecentFiles.Count > 10)
-                    RecentFiles.RemoveAt(RecentFiles.Count - 1);
+                TrimRecentFiles();
 
                 // 필터링된 목록 업데이트 (캐시 무효화)
                 _cachedFilteredFiles = null;
@@ -1948,8 +1956,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                         else
                         {
                             RecentFiles.Insert(0, compressedRecording);
-                            if (RecentFiles.Count > 10)
-                                RecentFiles.RemoveAt(RecentFiles.Count - 1);
+                            TrimRecentFiles();
                         }
 
                         _cachedFilteredFiles = null;

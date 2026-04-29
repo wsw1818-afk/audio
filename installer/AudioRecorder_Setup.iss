@@ -1,7 +1,7 @@
 ; AudioRecorder Pro - Inno Setup Script
 
 #define MyAppName "AudioRecorder Pro"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "AudioRecorder"
 #define MyAppURL "https://github.com/wsw1818-afk/audio"
 #define MyAppExeName "AudioRecorder.exe"

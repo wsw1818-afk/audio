@@ -6,9 +6,24 @@ obj/
 *.pdb
 *.deps.json
 *.runtimeconfig.json
+publish/
+publish_*/
+publish_temp/
+output/
+bepo/
+src/**/publish/
+src/**/publish_*/
+src/**/publish_installer*/
+**/publish_installer*
 
 # FFmpeg (too large)
 ffmpeg.exe
+
+# Generated captures and local automation
+*.png
+*.ps1
+tmpclaude-*
+nul
 
 # IDE
 .vs/
@@ -17,6 +32,7 @@ ffmpeg.exe
 
 # Debug
 debug.log
+*.log
 
 # Claude
 .claude/
